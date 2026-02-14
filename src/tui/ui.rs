@@ -1,4 +1,4 @@
-use super::app::App;
+use super::app::{App, DisplayLine};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -56,140 +56,178 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
+    use super::app::DisplayLine;
+    
+    // Calculate scroll offset to keep selected item visible
+    let visible_height = area.height.saturating_sub(2) as usize; // Subtract borders
+    if app.selected_line >= app.scroll_offset + visible_height {
+        app.scroll_offset = app.selected_line.saturating_sub(visible_height - 1);
+    } else if app.selected_line < app.scroll_offset {
+        app.scroll_offset = app.selected_line;
+    }
+    
     let mut items = Vec::new();
-    let mut visual_index = 0;
-    let mut selected_visual_index = 0;
 
-    for (idx, entry) in app.entries.iter().enumerate() {
-        let is_selected = idx == app.selected_index;
-        let is_expanded = app.expanded_items.contains(&idx);
-
-        if is_selected {
-            selected_visual_index = visual_index;
-        }
-
-        // Main syscall line
-        let line = format_syscall_line(entry, is_expanded);
-        let style = get_syscall_style(entry, is_selected);
+    // Only render items in the visible window
+    let start = app.scroll_offset;
+    let end = (app.scroll_offset + visible_height).min(app.display_lines.len());
+    
+    for line_idx in start..end {
+        let display_line = &app.display_lines[line_idx];
         
-        items.push(ListItem::new(line).style(style));
-        visual_index += 1;
-
-        // Expanded details
-        if is_expanded {
-            // Arguments
-            if !entry.arguments.is_empty() {
-                let args = format!("  ├─ Arguments: {}", truncate(&entry.arguments, 80));
-                items.push(ListItem::new(args).style(Style::default().fg(Color::Gray)));
-                visual_index += 1;
-            }
-
-            // Return value
-            if let Some(ref ret) = entry.return_value {
-                let ret_text = if entry.errno.is_some() {
-                    format!("  ├─ Return: {} (error)", ret)
+        let (line_text, line_style) = match display_line {
+            DisplayLine::SyscallHeader { entry_idx } => {
+                let entry = &app.entries[*entry_idx];
+                let is_expanded = app.expanded_items.contains(entry_idx);
+                let arrow = if is_expanded { "▼" } else { "▶" };
+                
+                let syscall_info = if entry.signal.is_some() {
+                    format!("--- {} ---", entry.syscall_name.to_uppercase())
+                } else if entry.exit_info.is_some() {
+                    format!("+++ {} +++", entry.syscall_name)
                 } else {
-                    format!("  ├─ Return: {}", ret)
+                    let args_preview = truncate(&entry.arguments, 40);
+                    let ret = entry.return_value.as_deref().unwrap_or("?");
+                    format!("{}({}) = {}", entry.syscall_name, args_preview, ret)
+                };
+
+                let text = format!(
+                    "{} {} [{}] {}",
+                    arrow,
+                    syscall_info,
+                    entry.pid,
+                    entry.timestamp
+                );
+                
+                let mut style = Style::default();
+                if entry.errno.is_some() {
+                    style = style.fg(Color::Red);
+                } else if entry.signal.is_some() {
+                    style = style.fg(Color::Yellow);
+                } else if entry.exit_info.is_some() {
+                    style = style.fg(Color::Cyan);
+                }
+                
+                (text, style)
+            }
+            
+            DisplayLine::Arguments { entry_idx } => {
+                let entry = &app.entries[*entry_idx];
+                let text = format!("  ├─ Arguments: {}", truncate(&entry.arguments, 80));
+                (text, Style::default().fg(Color::Gray))
+            }
+            
+            DisplayLine::ReturnValue { entry_idx } => {
+                let entry = &app.entries[*entry_idx];
+                let ret_text = if entry.errno.is_some() {
+                    format!("  ├─ Return: {} (error)", entry.return_value.as_deref().unwrap_or("?"))
+                } else {
+                    format!("  ├─ Return: {}", entry.return_value.as_deref().unwrap_or("?"))
                 };
                 let ret_style = if entry.errno.is_some() {
                     Style::default().fg(Color::Red)
                 } else {
                     Style::default().fg(Color::Green)
                 };
-                items.push(ListItem::new(ret_text).style(ret_style));
-                visual_index += 1;
+                (ret_text, ret_style)
             }
-
-            // Error details
-            if let Some(ref errno) = entry.errno {
-                let err_text = format!("  ├─ Error: {} ({})", errno.code, errno.message);
-                items.push(ListItem::new(err_text).style(Style::default().fg(Color::Red)));
-                visual_index += 1;
-            }
-
-            // Duration
-            if let Some(dur) = entry.duration {
-                let dur_text = format!("  ├─ Duration: {:.6}s", dur);
-                items.push(ListItem::new(dur_text).style(Style::default().fg(Color::Gray)));
-                visual_index += 1;
-            }
-
-            // Signal info
-            if let Some(ref signal) = entry.signal {
-                let sig_text = format!("  ├─ Signal: {} - {}", signal.signal_name, truncate(&signal.details, 60));
-                items.push(ListItem::new(sig_text).style(Style::default().fg(Color::Yellow)));
-                visual_index += 1;
-            }
-
-            // Exit info
-            if let Some(ref exit) = entry.exit_info {
-                let exit_text = if exit.killed {
-                    format!("  └─ Killed with signal {}", exit.code)
+            
+            DisplayLine::Error { entry_idx } => {
+                let entry = &app.entries[*entry_idx];
+                if let Some(ref errno) = entry.errno {
+                    let text = format!("  ├─ Error: {} ({})", errno.code, errno.message);
+                    (text, Style::default().fg(Color::Red))
                 } else {
-                    format!("  └─ Exited with code {}", exit.code)
-                };
-                items.push(ListItem::new(exit_text).style(Style::default().fg(Color::Cyan)));
-                visual_index += 1;
-            }
-
-            // Backtrace
-            if !entry.backtrace.is_empty() {
-                let bt_expanded = app.expanded_backtraces.contains(&idx);
-                let bt_arrow = if bt_expanded { "▼" } else { "▶" };
-                let bt_text = format!("  └{} Backtrace ({} frames)", bt_arrow, entry.backtrace.len());
-                items.push(ListItem::new(bt_text).style(Style::default().fg(Color::Magenta)));
-                visual_index += 1;
-
-                // Expanded backtrace frames
-                if bt_expanded {
-                    for (frame_idx, frame) in entry.backtrace.iter().enumerate() {
-                        let is_last = frame_idx == entry.backtrace.len() - 1;
-                        let tree_char = if is_last { "└─" } else { "├─" };
-                        
-                        let func = frame.function.as_deref().unwrap_or("");
-                        let offset = frame.offset.as_deref().unwrap_or("");
-                        let func_info = if !func.is_empty() && !offset.is_empty() {
-                            format!("({}+{})", func, offset)
-                        } else if !func.is_empty() {
-                            format!("({})", func)
-                        } else {
-                            String::new()
-                        };
-
-                        let frame_text = format!(
-                            "      {} {}{} [{}]",
-                            tree_char,
-                            truncate(&frame.binary, 50),
-                            func_info,
-                            frame.address
-                        );
-                        items.push(ListItem::new(frame_text).style(Style::default().fg(Color::DarkGray)));
-                        visual_index += 1;
-
-                        // Resolved location
-                        if let Some(ref resolved) = frame.resolved {
-                            let indent = if is_last { "    " } else { "    " };
-                            let loc_text = format!(
-                                "{}    → {}:{}",
-                                indent,
-                                truncate(&resolved.file, 60),
-                                resolved.line
-                            );
-                            items.push(ListItem::new(loc_text).style(Style::default().fg(Color::Green)));
-                            visual_index += 1;
-                        }
-                    }
+                    continue;
                 }
             }
-        }
-    }
+            
+            DisplayLine::Duration { entry_idx } => {
+                let entry = &app.entries[*entry_idx];
+                if let Some(dur) = entry.duration {
+                    let text = format!("  ├─ Duration: {:.6}s", dur);
+                    (text, Style::default().fg(Color::Gray))
+                } else {
+                    continue;
+                }
+            }
+            
+            DisplayLine::Signal { entry_idx } => {
+                let entry = &app.entries[*entry_idx];
+                if let Some(ref signal) = entry.signal {
+                    let text = format!("  ├─ Signal: {} - {}", signal.signal_name, truncate(&signal.details, 60));
+                    (text, Style::default().fg(Color::Yellow))
+                } else {
+                    continue;
+                }
+            }
+            
+            DisplayLine::Exit { entry_idx } => {
+                let entry = &app.entries[*entry_idx];
+                if let Some(ref exit) = entry.exit_info {
+                    let text = if exit.killed {
+                        format!("  └─ Killed with signal {}", exit.code)
+                    } else {
+                        format!("  └─ Exited with code {}", exit.code)
+                    };
+                    (text, Style::default().fg(Color::Cyan))
+                } else {
+                    continue;
+                }
+            }
+            
+            DisplayLine::BacktraceHeader { entry_idx } => {
+                let entry = &app.entries[*entry_idx];
+                let bt_expanded = app.expanded_backtraces.contains(entry_idx);
+                let bt_arrow = if bt_expanded { "▼" } else { "▶" };
+                let text = format!("  └{} Backtrace ({} frames)", bt_arrow, entry.backtrace.len());
+                (text, Style::default().fg(Color::Magenta))
+            }
+            
+            DisplayLine::BacktraceFrame { entry_idx, frame_idx } => {
+                let entry = &app.entries[*entry_idx];
+                let frame = &entry.backtrace[*frame_idx];
+                let is_last = *frame_idx == entry.backtrace.len() - 1;
+                let tree_char = if is_last { "└─" } else { "├─" };
+                
+                let func = frame.function.as_deref().unwrap_or("");
+                let offset = frame.offset.as_deref().unwrap_or("");
+                let func_info = if !func.is_empty() && !offset.is_empty() {
+                    format!("({}+{})", func, offset)
+                } else if !func.is_empty() {
+                    format!("({})", func)
+                } else {
+                    String::new()
+                };
 
-    // Calculate scroll offset to keep selected item visible
-    let visible_height = area.height.saturating_sub(2) as usize; // Subtract borders
-    if selected_visual_index >= app.scroll_offset + visible_height {
-        app.scroll_offset = selected_visual_index.saturating_sub(visible_height - 1);
-    } else if selected_visual_index < app.scroll_offset {
-        app.scroll_offset = selected_visual_index;
+                let text = format!(
+                    "      {} {}{} [{}]",
+                    tree_char,
+                    truncate(&frame.binary, 50),
+                    func_info,
+                    frame.address
+                );
+                (text, Style::default().fg(Color::DarkGray))
+            }
+            
+            DisplayLine::BacktraceResolved { entry_idx, frame_idx } => {
+                let entry = &app.entries[*entry_idx];
+                let frame = &entry.backtrace[*frame_idx];
+                if let Some(ref resolved) = frame.resolved {
+                    let text = format!(
+                        "          → {}:{}",
+                        truncate(&resolved.file, 60),
+                        resolved.line
+                    );
+                    (text, Style::default().fg(Color::Green))
+                } else {
+                    continue;
+                }
+            }
+        };
+        
+        // Don't apply highlight here - let ListState handle it
+        items.push(ListItem::new(line_text).style(line_style));
     }
 
     let list = List::new(items)
@@ -200,9 +238,11 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 .add_modifier(Modifier::BOLD)
         );
 
-    // Calculate which item to highlight based on selected_index
+    // Calculate which item in the visible list to highlight
     let mut state = ratatui::widgets::ListState::default();
-    state.select(Some(selected_visual_index));
+    if app.selected_line >= start && app.selected_line < end {
+        state.select(Some(app.selected_line - app.scroll_offset));
+    }
 
     f.render_stateful_widget(list, area, &mut state);
 }
@@ -226,11 +266,11 @@ fn draw_help(f: &mut Frame) {
         Line::from("  End/G       Jump to last item"),
         Line::from(""),
         Line::from(Span::styled("Actions:", Style::default().add_modifier(Modifier::UNDERLINED))),
-        Line::from("  Enter/Space Expand item / Toggle backtrace"),
+        Line::from("  Enter/Space Expand syscall or toggle backtrace"),
         Line::from("  x/Backspace Collapse current item"),
-        Line::from("  e           Expand all items"),
+        Line::from("  e           Expand all syscalls"),
         Line::from("  c           Collapse all items"),
-        Line::from("  r           Resolve backtrace for current item"),
+        Line::from("  r           Resolve current backtrace"),
         Line::from("  R           Resolve all backtraces (slow!)"),
         Line::from(""),
         Line::from(Span::styled("Other:", Style::default().add_modifier(Modifier::UNDERLINED))),
@@ -248,46 +288,6 @@ fn draw_help(f: &mut Frame) {
     let area = centered_rect(60, 80, f.area());
     f.render_widget(ratatui::widgets::Clear, area);
     f.render_widget(help, area);
-}
-
-fn format_syscall_line(entry: &crate::parser::SyscallEntry, is_expanded: bool) -> String {
-    let arrow = if is_expanded { "▼" } else { "▶" };
-    
-    let syscall_info = if entry.signal.is_some() {
-        format!("--- {} ---", entry.syscall_name.to_uppercase())
-    } else if entry.exit_info.is_some() {
-        format!("+++ {} +++", entry.syscall_name)
-    } else {
-        let args_preview = truncate(&entry.arguments, 40);
-        let ret = entry.return_value.as_deref().unwrap_or("?");
-        format!("{}({}) = {}", entry.syscall_name, args_preview, ret)
-    };
-
-    format!(
-        "{} {} [{}] {}",
-        arrow,
-        syscall_info,
-        entry.pid,
-        entry.timestamp
-    )
-}
-
-fn get_syscall_style(entry: &crate::parser::SyscallEntry, is_selected: bool) -> Style {
-    let mut style = Style::default();
-    
-    if entry.errno.is_some() {
-        style = style.fg(Color::Red);
-    } else if entry.signal.is_some() {
-        style = style.fg(Color::Yellow);
-    } else if entry.exit_info.is_some() {
-        style = style.fg(Color::Cyan);
-    }
-
-    if is_selected {
-        style = style.add_modifier(Modifier::BOLD);
-    }
-
-    style
 }
 
 fn truncate(s: &str, max_len: usize) -> String {
