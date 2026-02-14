@@ -75,6 +75,8 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     
     // Calculate scroll offset to keep selected item visible
     let visible_height = area.height as usize; // No borders, use full height
+    app.update_visible_height(visible_height);
+    
     if app.selected_line >= app.scroll_offset + visible_height {
         app.scroll_offset = app.selected_line.saturating_sub(visible_height - 1);
     } else if app.selected_line < app.scroll_offset {
@@ -267,7 +269,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_footer(f: &mut Frame, area: Rect) {
-    let footer = Paragraph::new("↑↓/jk: Navigate | Enter: Expand/Toggle | x: Collapse | e: Expand All | c: Collapse All | r: Resolve | q: Quit | ?: Help")
+    let footer = Paragraph::new("↑↓/jk: Navigate | PgUp/PgDn: Page | Ctrl+U/D: Half Page | Enter: Expand | x: Collapse | e/c: All | q: Quit | ?: Help")
         .style(Style::default().fg(Color::DarkGray));
     f.render_widget(footer, area);
 }
@@ -277,10 +279,12 @@ fn draw_help(f: &mut Frame) {
         Line::from(Span::styled("strace-tui Help", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
         Line::from(""),
         Line::from(Span::styled("Navigation:", Style::default().add_modifier(Modifier::UNDERLINED))),
-        Line::from("  ↑/k         Move up"),
-        Line::from("  ↓/j         Move down"),
+        Line::from("  ↑/k         Move up one line"),
+        Line::from("  ↓/j         Move down one line"),
         Line::from("  PageUp      Scroll up one page"),
         Line::from("  PageDown    Scroll down one page"),
+        Line::from("  Ctrl+U      Scroll up half page"),
+        Line::from("  Ctrl+D      Scroll down half page"),
         Line::from("  Home/g      Jump to first item"),
         Line::from("  End/G       Jump to last item"),
         Line::from(""),

@@ -29,6 +29,7 @@ pub struct App {
     pub scroll_offset: usize,
     pub expanded_items: HashSet<usize>,
     pub expanded_backtraces: HashSet<usize>,
+    pub last_visible_height: usize, // Track for page scrolling
     
     // Flags
     pub should_quit: bool,
@@ -51,11 +52,16 @@ impl App {
             scroll_offset: 0,
             expanded_items: HashSet::new(),
             expanded_backtraces: HashSet::new(),
+            last_visible_height: 20, // Default, will be updated on first draw
             should_quit: false,
             show_help: false,
         };
         app.rebuild_display_lines();
         app
+    }
+    
+    pub fn update_visible_height(&mut self, height: usize) {
+        self.last_visible_height = height;
     }
     
     fn rebuild_display_lines(&mut self) {
@@ -152,14 +158,16 @@ impl App {
                 self.move_down();
             }
             KeyCode::PageUp => {
-                for _ in 0..10 {
-                    self.move_up();
-                }
+                self.scroll_page(true, false);
             }
             KeyCode::PageDown => {
-                for _ in 0..10 {
-                    self.move_down();
-                }
+                self.scroll_page(false, false);
+            }
+            KeyCode::Char('u') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll_page(true, true);
+            }
+            KeyCode::Char('d') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll_page(false, true);
             }
             KeyCode::Home | KeyCode::Char('g') => {
                 self.selected_line = 0;
@@ -203,6 +211,49 @@ impl App {
     fn move_down(&mut self) {
         if self.selected_line + 1 < self.display_lines.len() {
             self.selected_line += 1;
+        }
+    }
+    
+    fn scroll_page(&mut self, up: bool, half: bool) {
+        if self.display_lines.is_empty() {
+            return;
+        }
+        
+        // Calculate scroll amount
+        let page_size = if half {
+            self.last_visible_height / 2
+        } else {
+            self.last_visible_height
+        };
+        
+        // Calculate cursor position relative to scroll_offset
+        let cursor_offset = self.selected_line.saturating_sub(self.scroll_offset);
+        
+        if up {
+            // Scroll up
+            let scroll_amount = page_size.min(self.scroll_offset);
+            self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
+            self.selected_line = self.selected_line.saturating_sub(scroll_amount);
+        } else {
+            // Scroll down
+            let max_scroll = self.display_lines.len().saturating_sub(self.last_visible_height);
+            let scroll_amount = page_size.min(max_scroll.saturating_sub(self.scroll_offset));
+            self.scroll_offset = (self.scroll_offset + scroll_amount).min(max_scroll);
+            self.selected_line = (self.selected_line + scroll_amount)
+                .min(self.display_lines.len().saturating_sub(1));
+        }
+        
+        // Try to maintain cursor position on screen
+        // Clamp selected_line to visible range
+        let min_visible = self.scroll_offset;
+        let max_visible = (self.scroll_offset + self.last_visible_height)
+            .min(self.display_lines.len())
+            .saturating_sub(1);
+        
+        if self.selected_line < min_visible {
+            self.selected_line = min_visible;
+        } else if self.selected_line > max_visible {
+            self.selected_line = max_visible;
         }
     }
     
