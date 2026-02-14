@@ -1,4 +1,5 @@
 mod parser;
+mod tui;
 
 use clap::{Parser as ClapParser, Subcommand};
 use parser::{Addr2LineResolver, StraceParser, StraceOutput, SummaryStats, ParseErrorInfo};
@@ -7,7 +8,7 @@ use std::process::Command;
 
 #[derive(ClapParser)]
 #[command(name = "strace-tui")]
-#[command(about = "Parse strace output and convert to structured data", long_about = None)]
+#[command(about = "Parse strace output and visualize in a TUI", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -21,15 +22,19 @@ enum Commands {
         #[arg(value_name = "FILE")]
         input: String,
         
-        /// Output file (default: stdout)
+        /// Output JSON instead of opening TUI
+        #[arg(long)]
+        json: bool,
+        
+        /// Output file (only with --json)
         #[arg(short, long, value_name = "FILE")]
         output: Option<String>,
         
-        /// Resolve backtraces using addr2line
+        /// Resolve backtraces using addr2line (only with --json)
         #[arg(short, long)]
         resolve: bool,
         
-        /// Pretty print JSON output
+        /// Pretty print JSON output (only with --json)
         #[arg(short, long)]
         pretty: bool,
     },
@@ -40,15 +45,19 @@ enum Commands {
         #[arg(required = true)]
         command: Vec<String>,
         
-        /// Output file (default: stdout)
+        /// Output JSON instead of opening TUI
+        #[arg(long)]
+        json: bool,
+        
+        /// Output file (only with --json)
         #[arg(short, long, value_name = "FILE")]
         output: Option<String>,
         
-        /// Resolve backtraces using addr2line
+        /// Resolve backtraces using addr2line (only with --json)
         #[arg(short, long)]
         resolve: bool,
         
-        /// Pretty print JSON output
+        /// Pretty print JSON output (only with --json)
         #[arg(short, long)]
         pretty: bool,
         
@@ -66,16 +75,59 @@ fn main() {
     let cli = Cli::parse();
     
     match cli.command {
-        Commands::Parse { input, output, resolve, pretty } => {
-            parse_file(&input, output, resolve, pretty);
+        Commands::Parse { input, json, output, resolve, pretty } => {
+            if json {
+                parse_file_json(&input, output, resolve, pretty);
+            } else {
+                parse_file_tui(&input);
+            }
         }
-        Commands::Trace { command, output, resolve, pretty, keep_trace, trace_file } => {
-            trace_command(command, output, resolve, pretty, keep_trace, trace_file);
+        Commands::Trace { command, json, output, resolve, pretty, keep_trace, trace_file } => {
+            let trace_path = run_strace(command, trace_file);
+            
+            if json {
+                parse_file_json(&trace_path, output, resolve, pretty);
+            } else {
+                parse_file_tui(&trace_path);
+            }
+            
+            // Clean up trace file unless keep_trace is set
+            if !keep_trace {
+                std::fs::remove_file(&trace_path).ok();
+            } else {
+                eprintln!("Trace file kept at: {}", trace_path);
+            }
         }
     }
 }
 
-fn parse_file(input: &str, output: Option<String>, resolve: bool, pretty: bool) {
+fn parse_file_tui(input: &str) {
+    // Parse the strace output
+    let mut parser = StraceParser::new();
+    let entries = match parser.parse_file(input) {
+        Ok(e) => e,
+        Err(err) => {
+            eprintln!("Error parsing file: {}", err);
+            std::process::exit(1);
+        }
+    };
+    
+    if entries.is_empty() {
+        eprintln!("No syscalls found in trace file");
+        std::process::exit(1);
+    }
+    
+    // Generate summary
+    let summary = generate_summary(&entries);
+    
+    // Run TUI
+    if let Err(e) = tui::run_tui(entries, summary, Some(input.to_string())) {
+        eprintln!("TUI error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn parse_file_json(input: &str, output: Option<String>, resolve: bool, pretty: bool) {
     // Parse the strace output
     let mut parser = StraceParser::new();
     let mut entries = match parser.parse_file(input) {
@@ -104,14 +156,7 @@ fn parse_file(input: &str, output: Option<String>, resolve: bool, pretty: bool) 
     output_results(entries, parser.errors, output, pretty);
 }
 
-fn trace_command(
-    command: Vec<String>,
-    output: Option<String>,
-    resolve: bool,
-    pretty: bool,
-    keep_trace: bool,
-    trace_file: Option<String>,
-) {
+fn run_strace(command: Vec<String>, trace_file: Option<String>) -> String {
     if command.is_empty() {
         eprintln!("Error: No command specified");
         std::process::exit(1);
@@ -156,21 +201,7 @@ fn trace_command(
         std::process::exit(1);
     }
     
-    eprintln!("Parsing trace output...");
-    
-    // Parse the trace file
-    parse_file(&trace_path, output, resolve, pretty);
-    
-    // Clean up trace file unless keep_trace is set
-    if !keep_trace {
-        if let Err(e) = std::fs::remove_file(&trace_path) {
-            eprintln!("Warning: Failed to remove trace file: {}", e);
-        } else {
-            eprintln!("Cleaned up trace file");
-        }
-    } else {
-        eprintln!("Trace file kept at: {}", trace_path);
-    }
+    trace_path
 }
 
 fn output_results(

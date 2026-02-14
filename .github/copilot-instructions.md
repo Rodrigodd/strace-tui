@@ -2,184 +2,332 @@
 
 ## Project Overview
 
-A terminal user interface (TUI) for strace, built in Rust. Currently implements a comprehensive parser for strace output that converts system call traces to structured JSON data. The TUI visualization component is planned for future development.
+strace-tui is a terminal user interface (TUI) for visualizing and exploring strace output. It parses strace output files and provides an interactive interface for browsing syscalls, viewing details, and resolving backtraces.
 
-## Build, Test, and Lint
+**Status**: ✅ Complete - Full TUI implementation with interactive navigation  
+**Language**: Rust (Edition 2024)  
+**Main Dependencies**: nom (parsing), ratatui (TUI), crossterm (terminal), serde (JSON), clap (CLI)
 
-### Build
+## Quick Commands
+
 ```bash
-cargo build
+# Build
 cargo build --release
-```
 
-### Run
-```bash
-# Parse existing strace file
-cargo run -- parse <strace-file> [options]
-cargo run -- parse /tmp/trace.txt --pretty
-
-# Trace a command and parse
-cargo run -- trace <command> [args...] [options]
-cargo run -- trace echo "Hello"
-cargo run -- trace --resolve ./my_program
-
-# Run example programs
-cargo run --example syscall_test
-cargo run --example test_parser
-```
-
-### Test
-```bash
-# Run all tests
+# Run tests
 cargo test
 
-# Run a single test
-cargo test test_name
+# TUI mode (default)
+./target/release/strace-tui parse trace.txt
+./target/release/strace-tui trace ls -la
 
-# Run tests in a specific module
-cargo test parser::
+# JSON mode
+./target/release/strace-tui parse trace.txt --json --pretty
+./target/release/strace-tui trace --json echo "test"
 
-# Run integration tests
-cargo test --test integration_test
-```
-
-### Lint
-```bash
-# Check code without building
-cargo check
-
-# Run clippy for linting
-cargo clippy
-cargo clippy -- -D warnings  # Treat warnings as errors
-
-# Format code
-cargo fmt
-cargo fmt -- --check  # Check formatting without modifying files
+# Generate test trace
+cargo build --example syscall_test
+strace -o trace.txt -t -k -f -s 1024 ./target/debug/examples/syscall_test
 ```
 
 ## Architecture
 
-### Current Structure
-- `src/lib.rs` - Library entry point, re-exports parser module
-- `src/main.rs` - CLI application with two subcommands:
-  - `parse` - Parse existing strace output files
-  - `trace` - Run strace on a command and parse the output automatically
-- `src/parser/` - Core parsing logic
-  - `mod.rs` - Parser orchestration and multi-line handling
-  - `types.rs` - Data structures (SyscallEntry, BacktraceFrame, etc.)
-  - `line_parser.rs` - Parses individual strace lines using nom
-  - `backtrace_parser.rs` - Parses stack trace lines from `-k` flag
-  - `resolver.rs` - Resolves addresses to source locations via addr2line
-- `examples/` - Example programs
-  - `syscall_test.rs` - Generates various syscalls for testing
-  - `test_parser.rs` - Demonstrates parser usage
-- `tests/` - Integration tests
+### Overview
+The project has three main components:
 
-### CLI Workflow
+1. **Parser** (`src/parser/`) - Parses strace output into structured data
+2. **TUI** (`src/tui/`) - Interactive terminal interface for exploration
+3. **CLI** (`src/main.rs`) - Command-line interface with parse/trace subcommands
 
-**Parse Subcommand:**
-1. User provides existing strace file
-2. Parser reads and parses the file
-3. Optional: Resolve addresses with addr2line
-4. Output JSON to stdout or file
+### Mode Selection
+- **Default**: Interactive TUI for visual exploration
+- **JSON mode**: Use `--json` flag for programmatic access
 
-**Trace Subcommand:**
-1. User provides command to trace
-2. CLI runs `strace -o tempfile -t -k -f -s 1024 <command>`
-3. Command executes (output goes to stdout/stderr as normal)
-4. CLI parses the generated strace output
-5. Optional: Resolve addresses with addr2line
-6. Output JSON to stdout or file
-7. Clean up temp file (unless `--keep-trace` specified)
+### Module Structure
 
-### Parser Flow
-1. **Input**: strace output file (from `strace -o out.txt -t -k -f -s 1024 <cmd>`)
-2. **Line-by-line parsing**: Each line is classified as syscall, backtrace, signal, or exit
-3. **State management**: Handles `<unfinished ...>` and `<... resumed>` patterns across lines
-4. **Backtrace assembly**: Groups consecutive backtrace lines with their syscall
-5. **Address resolution** (optional): Shells out to `addr2line` to resolve addresses
-6. **Output**: Structured JSON with entries, summary statistics, and parse errors
-
-### Key Data Structures
-- **SyscallEntry**: Represents a single syscall with PID, timestamp, arguments, return value, errno, backtrace, and flags
-- **BacktraceFrame**: Stack frame with binary path, function name, address, and optional resolved source location
-- **StraceParser**: Stateful parser that accumulates entries and handles multi-line constructs
-
-## Key Conventions
-
-### Rust Edition
-The project uses Rust edition 2024 as specified in Cargo.toml.
-
-### Error Handling
-- Parser collects all errors during parsing rather than failing fast
-- Errors are returned in the final output with line numbers
-- Individual address resolution failures don't stop the overall process
-
-### Code Style
-Follow standard Rust conventions:
-- Use `cargo fmt` for consistent formatting
-- Address all `cargo clippy` warnings
-- Use idiomatic Rust patterns (Result types, pattern matching, etc.)
-
-## Working with strace
-
-### Generating Test Data
-```bash
-# Run strace with required flags
-strace -o out.txt -t -k -f -s 1024 <command>
-
-# Flags explained:
-# -o out.txt : Write to file instead of stderr
-# -t : Include timestamps (HH:MM:SS format)
-# -k : Include kernel backtraces
-# -f : Follow forks (trace child processes)
-# -s 1024 : Capture up to 1024 bytes of string arguments
+```
+src/
+├── main.rs              # CLI entry point, subcommand handling
+├── lib.rs               # Library interface
+├── parser/
+│   ├── mod.rs           # Parser orchestration, multi-line handling
+│   ├── types.rs         # Data structures (SyscallEntry, etc.)
+│   ├── line_parser.rs   # nom-based line parsing
+│   ├── backtrace_parser.rs  # Backtrace parsing
+│   └── resolver.rs      # addr2line integration
+└── tui/
+    ├── mod.rs           # TUI entry point, terminal setup
+    ├── app.rs           # Application state and event handling
+    ├── ui.rs            # Rendering logic
+    └── events.rs        # Keyboard input handling
 ```
 
-### strace Output Patterns
-The parser handles:
-- **Regular syscalls**: `PID TIME syscall(args) = retval`
-- **Failed syscalls**: `... = -1 ERRNO (Error message)`
-- **Unfinished syscalls**: `... <unfinished ...>` (async operations)
-- **Resumed syscalls**: `<... syscall resumed> ...) = retval`
-- **Signals**: `--- SIGNAL {...} ---`
-- **Process exit**: `+++ exited with N +++`
-- **Backtraces**: ` > /path/to/binary(function+offset) [0xaddr]`
-- **Multi-process traces**: PID prefix on each line
+## Key Features
 
-### Important Notes
-- strace outputs to stderr by default, not stdout
-- Backtrace addresses are relative to the binary's load address
-- System libraries often lack debug symbols, so addr2line may fail for them
-- Platform-specific: strace is Linux-specific
+### Parser
+- **Input format**: `strace -o file.txt -t -k -f -s 1024 <cmd>`
+- **Supports**: All syscall patterns, signals, exits, multi-process traces, kernel backtraces
+- **Parser**: nom combinator-based, handles `<unfinished ...>` and `<... resumed>` patterns
+- **Output**: Structured `SyscallEntry` objects with full metadata
 
-## Development Tips
+### TUI
+- **Navigation**: Arrow keys, vim-style (j/k), page up/down, home/end
+- **Expansion**: Enter to expand syscall details and toggle backtraces
+- **Colors**: Red (errors), yellow (signals), cyan (exits), green (resolved addresses)
+- **Performance**: Lazy backtrace resolution (only on expand), smooth scrolling
+- **Help**: Press `?` for keybindings overlay
 
-### Adding New Syscall Patterns
-When supporting new syscall formats:
-1. Add test cases in `src/parser/line_parser.rs` tests
-2. Update the nom parser combinators in `parse_strace_line()`
-3. Handle edge cases in `parse_arguments()` if the pattern is complex
+### addr2line Integration
+- **On-demand**: Backtraces resolved when expanded in TUI
+- **Batch mode**: Pre-resolve all with `-r` in JSON mode
+- **Caching**: Addresses cached to avoid redundant lookups
+- **Method**: Shells out to system `addr2line` binary
 
-### Testing Parser Changes
-1. Use `examples/syscall_test.rs` to generate real strace output
-2. Run `strace -o /tmp/test.txt -t -k -f -s 1024 ./target/debug/examples/syscall_test`
-3. Parse it: `cargo run -- /tmp/test.txt --pretty | head -100`
-4. Verify specific patterns with grep: `cat /tmp/test.txt | grep -A 5 "unfinished"`
+## Data Structures
+
+```rust
+// Main entry type
+pub struct SyscallEntry {
+    pub pid: u32,
+    pub timestamp: String,
+    pub syscall_name: String,
+    pub arguments: String,
+    pub return_value: Option<String>,
+    pub errno: Option<ErrnoInfo>,
+    pub duration: Option<f64>,
+    pub backtrace: Vec<BacktraceFrame>,
+    pub is_unfinished: bool,
+    pub is_resumed: bool,
+    pub signal: Option<SignalInfo>,
+    pub exit_info: Option<ExitInfo>,
+}
+
+// Backtrace frame
+pub struct BacktraceFrame {
+    pub binary: String,
+    pub function: Option<String>,
+    pub offset: Option<String>,
+    pub address: String,
+    pub resolved: Option<ResolvedLocation>,
+}
+
+// TUI state
+pub struct App {
+    pub entries: Vec<SyscallEntry>,
+    pub resolver: Addr2LineResolver,
+    pub selected_index: usize,
+    pub scroll_offset: usize,
+    pub expanded_items: HashSet<usize>,
+    pub expanded_backtraces: HashSet<usize>,
+    pub should_quit: bool,
+    pub show_help: bool,
+}
+```
+
+## strace Output Patterns
+
+The parser handles all major strace patterns:
+
+### Regular syscall
+```
+12345 10:20:30 write(1, "hello\n", 6) = 6
+```
+
+### With error
+```
+12345 10:20:30 open("/no/file", O_RDONLY) = -1 ENOENT (No such file or directory)
+```
+
+### Unfinished/resumed (multi-line async)
+```
+12345 10:20:30 read(3, <unfinished ...>
+12346 10:20:31 write(1, "test", 4) = 4
+12345 10:20:32 <... read resumed> "data", 1024) = 4
+```
+
+### Signal
+```
+12345 10:20:30 --- SIGSEGV {si_signo=SIGSEGV, si_code=SEGV_MAPERR, ...} ---
+```
+
+### Exit
+```
+12345 10:20:30 +++ exited with 0 +++
+12346 10:20:31 +++ killed by SIGKILL +++
+```
+
+### Backtrace (multi-line)
+```
+12345 10:20:30 write(1, "test", 4) = 4
+ > /usr/lib/libc.so.6(__write+0x14) [0x10e53e]
+ > /home/user/program(main+0x2a) [0x401234]
+```
+
+## Parser Flow
+
+1. **Line-by-line parsing** (`src/parser/mod.rs:parse_lines()`)
+   - Read each line
+   - Check if it's a backtrace line (starts with ` > `)
+   - If backtrace: add to pending backtrace buffer
+   - If syscall: parse with `line_parser.rs`, attach pending backtrace
+
+2. **Syscall parsing** (`src/parser/line_parser.rs:parse_strace_line()`)
+   - Extract PID and timestamp
+   - Parse syscall name
+   - Parse arguments (handling nested parentheses)
+   - Check for `<unfinished ...>` pattern
+   - Parse return value and errno
+   - Handle special cases (signals, exits, resumed)
+
+3. **Unfinished/resumed handling**
+   - Store unfinished entries in `HashMap<u32, SyscallEntry>` keyed by PID
+   - When `<... resumed>` found, merge with stored entry
+   - Preserve original timestamp from unfinished line
+
+4. **Backtrace parsing** (`src/parser/backtrace_parser.rs`)
+   - Parse binary path, function name, offset, address
+   - Multiple formats supported (with/without function, with/without offset)
+
+5. **Resolution** (`src/parser/resolver.rs`)
+   - Call `addr2line -e <binary> -f -C <address>`
+   - Parse output: function name on line 1, file:line on line 2
+   - Cache results for performance
+
+## TUI Implementation
+
+### Event Loop (src/tui/mod.rs)
+1. Setup terminal (raw mode, alternate screen)
+2. Create App state with parsed entries
+3. Loop:
+   - Draw UI (`ui::draw()`)
+   - Poll for keyboard events (100ms timeout)
+   - Handle events (`app.handle_event()`)
+   - Check quit flag
+4. Cleanup terminal
+
+### Drawing (src/tui/ui.rs)
+- **Header**: File name, summary stats (syscalls, errors, PIDs, signals)
+- **Main list**: Tree-style expandable items
+  - Main syscall line with arrow (▶/▼)
+  - Expanded details (arguments, return value, error, duration, signal, exit)
+  - Backtrace section (expandable, resolves on-demand)
+- **Footer**: Keybinding help
+- **Help overlay**: Full help on `?` key (centered, 60x80%)
+
+### Navigation (src/tui/app.rs)
+- Track `selected_index` (which syscall)
+- Track `expanded_items` (which syscalls are expanded)
+- Track `expanded_backtraces` (which backtraces are visible)
+- Auto-scroll to keep selection visible
+- Enter: Expand/toggle backtrace
+- x: Collapse current
+- e/c: Expand/collapse all
+
+## Development Guidelines
+
+### Code Style
+- Use `cargo fmt` for formatting
+- Follow Rust naming conventions (snake_case for functions, PascalCase for types)
+- Add comments for complex parsing logic
+- Keep functions focused and small
+
+### Testing
+- Unit tests in each module (`#[cfg(test)] mod tests`)
+- Integration tests in `tests/` directory
+- Test all parser patterns (see `line_parser.rs` tests)
+- Use `pretty_assertions` for better diff output
+
+### Error Handling
+- Parser: Collect errors, don't fail on first error
+- CLI: Exit with code 1 on errors, print to stderr
+- TUI: Graceful degradation (missing data shows as empty)
 
 ### Performance Considerations
-- Parser uses streaming I/O (BufReader) to handle large trace files
-- addr2line resolution is cached to avoid redundant lookups
-- For very large files (millions of syscalls), consider increasing the buffer size
+- **Lazy resolution**: Only resolve backtraces when expanded (addr2line is slow ~50-100ms per address)
+- **Caching**: Resolver caches all lookups in HashMap
+- **Streaming**: Parser reads line-by-line, doesn't load entire file
+- **Virtual scrolling**: TUI loads all entries but only renders visible region
 
-## Future TUI Development
+## Common Tasks
 
-When implementing the TUI visualization:
-- Use `ratatui` crate (modern, actively maintained)
-- Handle terminal resize events
-- Ensure proper cleanup on exit (restore terminal state)
-- Consider async runtime for non-blocking I/O
-- Design for filtering, searching, and navigation of syscall traces
-- Show process tree visualization for multi-process traces
-- Highlight failed syscalls and signals
+### Adding a new syscall pattern
+1. Add test case in `line_parser.rs::tests`
+2. Update `parse_syscall_name()` or add special case parsing
+3. Update `types.rs` if new data needs to be captured
+4. Run tests: `cargo test parser::line_parser::tests`
 
+### Modifying TUI layout
+1. Update `ui.rs::draw_list()` for main list rendering
+2. Update `ui.rs::draw_header()` or `draw_footer()` for top/bottom
+3. Test with: `cargo run -- parse trace.txt`
+
+### Adding TUI keybinding
+1. Add handler in `app.rs::handle_event()`
+2. Update help text in `ui.rs::draw_help()`
+3. Update footer in `ui.rs::draw_footer()`
+
+## Testing
+
+```bash
+# Run all tests
+cargo test
+
+# Run specific test
+cargo test test_parse_simple_syscall
+
+# Run with output
+cargo test -- --nocapture
+
+# Generate test data
+cargo build --example syscall_test
+strace -o trace.txt -t -k -f -s 1024 ./target/debug/examples/syscall_test
+
+# Test TUI (use 'q' to quit)
+cargo run -- parse trace.txt
+
+# Test JSON output
+cargo run -- parse trace.txt --json | jq '.summary'
+```
+
+## Known Issues & Limitations
+
+1. **Duration parsing**: Not yet implemented (always returns `null`)
+2. **Dead code**: `ParseError::MissingTimestamp` never constructed
+3. **System libraries**: Often lack debug symbols, addr2line returns `??`
+4. **Large traces**: 10k+ syscalls may be slow in TUI
+5. **Terminal size**: TUI requires minimum 80x24 terminal
+
+## Future Enhancements
+
+- [ ] Implement duration parsing
+- [ ] Add filtering/search in TUI
+- [ ] Process tree visualization
+- [ ] Real-time mode (live strace integration)
+- [ ] Performance profiling view
+- [ ] Export filtered results
+
+## Dependencies
+
+```toml
+[dependencies]
+nom = "7.1"                    # Parser combinators
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"             # JSON serialization
+clap = { version = "4.5", features = ["derive"] }
+thiserror = "2.0"              # Error handling
+ratatui = "0.28"               # TUI framework
+crossterm = "0.28"             # Terminal handling
+
+[dev-dependencies]
+pretty_assertions = "1.4"      # Better test diffs
+```
+
+## Files of Interest
+
+- `src/parser/line_parser.rs` (12K chars) - Core parsing logic with nom
+- `src/tui/ui.rs` (9K chars) - TUI rendering with ratatui
+- `src/tui/app.rs` (5K chars) - TUI state management
+- `src/parser/mod.rs` (5K chars) - Parser orchestration
+- `src/main.rs` (13K chars) - CLI entry point
+- `tests/integration_test.rs` - End-to-end CLI tests
+- `examples/syscall_test.rs` - Generates realistic strace output

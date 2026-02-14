@@ -106,7 +106,7 @@ fn test_cli_parse_subcommand() {
     
     // Run the parse subcommand using the built binary
     let output = Command::new("./target/debug/strace-tui")
-        .args(&["parse", temp_file])
+        .args(&["parse", temp_file, "--json"])
         .output()
         .expect("Failed to run parse command");
     
@@ -136,7 +136,7 @@ fn test_cli_trace_subcommand() {
     
     // Run the trace subcommand with output to file to avoid mixing traced program output with JSON
     let output = Command::new("./target/debug/strace-tui")
-        .args(&["trace", "--output", "/tmp/trace_test_output.json", "echo", "test"])
+        .args(&["trace", "--json", "--output", "/tmp/trace_test_output.json", "echo", "test"])
         .output()
         .expect("Failed to run trace command");
     
