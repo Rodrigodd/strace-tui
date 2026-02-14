@@ -16,20 +16,28 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Header
+            Constraint::Length(1),  // Header line
+            Constraint::Length(1),  // Divider
             Constraint::Min(0),     // Main content
-            Constraint::Length(1),  // Footer
+            Constraint::Length(1),  // Divider
+            Constraint::Length(1),  // Footer line
         ])
         .split(f.area());
 
     // Draw header
     draw_header(f, app, chunks[0]);
+    
+    // Draw divider
+    draw_divider(f, chunks[1]);
 
     // Draw main list
-    draw_list(f, app, chunks[1]);
+    draw_list(f, app, chunks[2]);
+    
+    // Draw divider
+    draw_divider(f, chunks[3]);
 
     // Draw footer
-    draw_footer(f, chunks[2]);
+    draw_footer(f, chunks[4]);
 }
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
@@ -40,7 +48,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         .unwrap_or("strace");
 
     let header_text = format!(
-        "File: {} | Syscalls: {} | Failed: {} | PIDs: {} | Signals: {}",
+        "strace-tui: {} | Syscalls: {} | Failed: {} | PIDs: {} | Signals: {}",
         file_name,
         app.summary.total_syscalls,
         app.summary.failed_syscalls,
@@ -49,17 +57,24 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     );
 
     let header = Paragraph::new(header_text)
-        .style(Style::default().fg(Color::Cyan))
-        .block(Block::default().borders(Borders::ALL).title("strace-tui"));
+        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
 
     f.render_widget(header, area);
+}
+
+fn draw_divider(f: &mut Frame, area: Rect) {
+    let divider = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(Color::DarkGray));
+    
+    f.render_widget(divider, area);
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     use super::app::DisplayLine;
     
     // Calculate scroll offset to keep selected item visible
-    let visible_height = area.height.saturating_sub(2) as usize; // Subtract borders
+    let visible_height = area.height as usize; // No borders, use full height
     if app.selected_line >= app.scroll_offset + visible_height {
         app.scroll_offset = app.selected_line.saturating_sub(visible_height - 1);
     } else if app.selected_line < app.scroll_offset {
@@ -231,7 +246,6 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL))
         .highlight_style(
             Style::default()
                 .bg(Color::DarkGray)
@@ -249,7 +263,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_footer(f: &mut Frame, area: Rect) {
     let footer = Paragraph::new("↑↓/jk: Navigate | Enter: Expand/Toggle | x: Collapse | e: Expand All | c: Collapse All | r: Resolve | q: Quit | ?: Help")
-        .style(Style::default().fg(Color::Gray));
+        .style(Style::default().fg(Color::DarkGray));
     f.render_widget(footer, area);
 }
 
