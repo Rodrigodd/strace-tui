@@ -1,6 +1,7 @@
 use crate::parser::{Addr2LineResolver, SyscallEntry, SummaryStats};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::HashSet;
+use super::process_graph::ProcessGraph;
 
 #[derive(Debug, Clone)]
 pub enum DisplayLine {
@@ -39,6 +40,7 @@ pub struct App {
     pub resolver: Addr2LineResolver,
     pub summary: SummaryStats,
     pub file_path: Option<String>,
+    pub process_graph: ProcessGraph,
     
     // UI State
     pub display_lines: Vec<DisplayLine>,
@@ -59,11 +61,14 @@ impl App {
         summary: SummaryStats,
         file_path: Option<String>,
     ) -> Self {
+        let process_graph = ProcessGraph::build(&entries);
+        
         let mut app = Self {
             entries,
             resolver: Addr2LineResolver::new(),
             summary,
             file_path,
+            process_graph,
             display_lines: Vec::new(),
             selected_line: 0,
             scroll_offset: 0,

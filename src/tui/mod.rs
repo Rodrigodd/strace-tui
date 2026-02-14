@@ -2,6 +2,7 @@ mod app;
 mod ui;
 mod events;
 mod syscall_colors;
+mod process_graph;
 
 pub use app::App;
 use events::EventHandler;

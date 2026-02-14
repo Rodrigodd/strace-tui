@@ -113,18 +113,28 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                         format!("+++ {} +++", entry.syscall_name)
                     };
                     
+                    // Get graph for this entry
+                    let graph = app.process_graph.render_graph_for_entry(*entry_idx, entry);
+                    let graph_with_spaces = if !graph.is_empty() {
+                        format!("  {}  ", graph)
+                    } else {
+                        String::new()
+                    };
+                    
+                    let pid_color = app.process_graph.get_color(entry.pid);
                     let metadata = format!("[{}] {}", entry.pid, entry.timestamp);
                     let metadata_len = metadata.chars().count();
+                    let graph_len = graph_with_spaces.chars().count();
                     let left_part = format!("{} {}", arrow, syscall_info);
                     let left_len = left_part.chars().count();
                     
-                    let text = if left_len + 1 + metadata_len <= width {
-                        let padding = width.saturating_sub(left_len + metadata_len);
-                        format!("{}{:padding$}{}", left_part, "", metadata, padding = padding)
+                    let text = if left_len + graph_len + metadata_len <= width {
+                        let padding = width.saturating_sub(left_len + graph_len + metadata_len);
+                        format!("{}{:padding$}{}{}", left_part, "", graph_with_spaces, metadata, padding = padding)
                     } else {
-                        let available_for_left = width.saturating_sub(metadata_len + 1);
+                        let available_for_left = width.saturating_sub(graph_len + metadata_len + 1);
                         let truncated_left = truncate_line(&left_part, available_for_left);
-                        format!("{} {}", truncated_left, metadata)
+                        format!("{} {}{}", truncated_left, graph_with_spaces, metadata)
                     };
                     
                     let color = if is_signal { Color::Yellow } else { Color::Cyan };
@@ -134,16 +144,26 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     let args_preview = truncate(&entry.arguments, 30);
                     let ret = entry.return_value.as_deref().unwrap_or("?");
                     
+                    // Get graph for this entry
+                    let graph = app.process_graph.render_graph_for_entry(*entry_idx, entry);
+                    let graph_with_spaces = if !graph.is_empty() {
+                        format!("  {}  ", graph)
+                    } else {
+                        String::new()
+                    };
+                    
                     // Build the parts
                     let arrow_str = format!("{} ", arrow);
                     let syscall_name = &entry.syscall_name;
                     let args_and_ret = format!("({}) = {}", args_preview, ret);
+                    let pid_color = app.process_graph.get_color(entry.pid);
                     let metadata = format!("[{}] {}", entry.pid, entry.timestamp);
                     
                     // Calculate lengths
                     let arrow_len = arrow_str.chars().count();
                     let syscall_len = syscall_name.chars().count();
                     let args_ret_len = args_and_ret.chars().count();
+                    let graph_len = graph_with_spaces.chars().count();
                     let metadata_len = metadata.chars().count();
                     let left_total = arrow_len + syscall_len + args_ret_len;
                     
@@ -151,9 +171,9 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     let syscall_color = syscall_category_color(syscall_name);
                     let rest_color = if has_error { Color::Red } else { Color::White };
                     
-                    if left_total + 1 + metadata_len <= width {
+                    if left_total + graph_len + metadata_len <= width {
                         // Enough space - build with padding
-                        let padding_len = width.saturating_sub(left_total + metadata_len);
+                        let padding_len = width.saturating_sub(left_total + graph_len + metadata_len);
                         let padding = " ".repeat(padding_len);
                         
                         Line::from(vec![
@@ -161,11 +181,12 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                             Span::styled(syscall_name.to_string(), Style::default().fg(syscall_color)),
                             Span::styled(args_and_ret, Style::default().fg(rest_color)),
                             Span::styled(padding, Style::default()),
+                            Span::styled(graph_with_spaces, Style::default().fg(Color::DarkGray)),
                             Span::styled(metadata, Style::default().fg(rest_color)),
                         ])
                     } else {
                         // Not enough space - need to truncate
-                        let available_for_left = width.saturating_sub(metadata_len + 1);
+                        let available_for_left = width.saturating_sub(graph_len + metadata_len + 1);
                         
                         // Try to show as much as possible
                         if arrow_len + syscall_len + 5 <= available_for_left {
@@ -178,6 +199,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                                 Span::styled(syscall_name.to_string(), Style::default().fg(syscall_color)),
                                 Span::styled(truncated_args, Style::default().fg(rest_color)),
                                 Span::styled(" ", Style::default()),
+                                Span::styled(graph_with_spaces, Style::default().fg(Color::DarkGray)),
                                 Span::styled(metadata, Style::default().fg(rest_color)),
                             ])
                         } else {
@@ -188,6 +210,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                             Line::from(vec![
                                 Span::styled(truncated, Style::default().fg(rest_color)),
                                 Span::styled(" ", Style::default()),
+                                Span::styled(graph_with_spaces, Style::default().fg(Color::DarkGray)),
                                 Span::styled(metadata, Style::default().fg(rest_color)),
                             ])
                         }
