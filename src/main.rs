@@ -1,36 +1,84 @@
 mod parser;
 
-use clap::Parser as ClapParser;
+use clap::{Parser as ClapParser, Subcommand};
 use parser::{Addr2LineResolver, StraceParser, StraceOutput, SummaryStats, ParseErrorInfo};
 use std::collections::HashSet;
+use std::process::Command;
 
 #[derive(ClapParser)]
 #[command(name = "strace-tui")]
 #[command(about = "Parse strace output and convert to structured data", long_about = None)]
 struct Cli {
-    /// Input strace output file
-    #[arg(value_name = "FILE")]
-    input: String,
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Parse an existing strace output file
+    Parse {
+        /// Input strace output file
+        #[arg(value_name = "FILE")]
+        input: String,
+        
+        /// Output file (default: stdout)
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<String>,
+        
+        /// Resolve backtraces using addr2line
+        #[arg(short, long)]
+        resolve: bool,
+        
+        /// Pretty print JSON output
+        #[arg(short, long)]
+        pretty: bool,
+    },
     
-    /// Output file (default: stdout)
-    #[arg(short, long, value_name = "FILE")]
-    output: Option<String>,
-    
-    /// Resolve backtraces using addr2line
-    #[arg(short, long)]
-    resolve: bool,
-    
-    /// Pretty print JSON output
-    #[arg(short, long)]
-    pretty: bool,
+    /// Run strace on a command and parse the output
+    Trace {
+        /// Command to trace
+        #[arg(required = true)]
+        command: Vec<String>,
+        
+        /// Output file (default: stdout)
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<String>,
+        
+        /// Resolve backtraces using addr2line
+        #[arg(short, long)]
+        resolve: bool,
+        
+        /// Pretty print JSON output
+        #[arg(short, long)]
+        pretty: bool,
+        
+        /// Keep the strace output file (by default it's deleted)
+        #[arg(short, long)]
+        keep_trace: bool,
+        
+        /// Path for strace output (default: temp file)
+        #[arg(long, value_name = "FILE")]
+        trace_file: Option<String>,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
     
+    match cli.command {
+        Commands::Parse { input, output, resolve, pretty } => {
+            parse_file(&input, output, resolve, pretty);
+        }
+        Commands::Trace { command, output, resolve, pretty, keep_trace, trace_file } => {
+            trace_command(command, output, resolve, pretty, keep_trace, trace_file);
+        }
+    }
+}
+
+fn parse_file(input: &str, output: Option<String>, resolve: bool, pretty: bool) {
     // Parse the strace output
     let mut parser = StraceParser::new();
-    let mut entries = match parser.parse_file(&cli.input) {
+    let mut entries = match parser.parse_file(input) {
         Ok(e) => e,
         Err(err) => {
             eprintln!("Error parsing file: {}", err);
@@ -39,7 +87,7 @@ fn main() {
     };
     
     // Resolve backtraces if requested
-    if cli.resolve {
+    if resolve {
         eprintln!("Resolving backtraces with addr2line...");
         let mut resolver = Addr2LineResolver::new();
         
@@ -52,11 +100,90 @@ fn main() {
         eprintln!("Resolved {} unique addresses", resolver.cache_size());
     }
     
+    // Generate and output
+    output_results(entries, parser.errors, output, pretty);
+}
+
+fn trace_command(
+    command: Vec<String>,
+    output: Option<String>,
+    resolve: bool,
+    pretty: bool,
+    keep_trace: bool,
+    trace_file: Option<String>,
+) {
+    if command.is_empty() {
+        eprintln!("Error: No command specified");
+        std::process::exit(1);
+    }
+    
+    // Determine trace file path
+    let trace_path = trace_file.unwrap_or_else(|| {
+        format!("/tmp/strace-tui-{}.txt", std::process::id())
+    });
+    
+    eprintln!("Running strace on: {}", command.join(" "));
+    eprintln!("Trace output: {}", trace_path);
+    
+    // Run strace
+    let status = Command::new("strace")
+        .arg("-o")
+        .arg(&trace_path)
+        .arg("-t")  // timestamps
+        .arg("-k")  // backtraces
+        .arg("-f")  // follow forks
+        .arg("-s")
+        .arg("1024")  // string capture size
+        .args(&command)
+        .status();
+    
+    let status = match status {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error running strace: {}", e);
+            eprintln!("Make sure strace is installed and in PATH");
+            std::process::exit(1);
+        }
+    };
+    
+    if !status.success() {
+        eprintln!("Warning: strace exited with status: {}", status);
+    }
+    
+    // Check if trace file exists
+    if !std::path::Path::new(&trace_path).exists() {
+        eprintln!("Error: Trace file not created: {}", trace_path);
+        std::process::exit(1);
+    }
+    
+    eprintln!("Parsing trace output...");
+    
+    // Parse the trace file
+    parse_file(&trace_path, output, resolve, pretty);
+    
+    // Clean up trace file unless keep_trace is set
+    if !keep_trace {
+        if let Err(e) = std::fs::remove_file(&trace_path) {
+            eprintln!("Warning: Failed to remove trace file: {}", e);
+        } else {
+            eprintln!("Cleaned up trace file");
+        }
+    } else {
+        eprintln!("Trace file kept at: {}", trace_path);
+    }
+}
+
+fn output_results(
+    entries: Vec<parser::SyscallEntry>,
+    errors: Vec<(usize, parser::ParseError)>,
+    output_file: Option<String>,
+    pretty: bool,
+) {
     // Generate summary stats
     let summary = generate_summary(&entries);
     
     // Convert parse errors
-    let error_info: Vec<ParseErrorInfo> = parser.errors.iter()
+    let error_info: Vec<ParseErrorInfo> = errors.iter()
         .map(|(line, err)| ParseErrorInfo {
             line_number: *line,
             message: err.to_string(),
@@ -70,7 +197,7 @@ fn main() {
     };
     
     // Serialize to JSON
-    let json = if cli.pretty {
+    let json = if pretty {
         serde_json::to_string_pretty(&output)
     } else {
         serde_json::to_string(&output)
@@ -85,12 +212,12 @@ fn main() {
     };
     
     // Write output
-    if let Some(output_file) = cli.output {
-        if let Err(err) = std::fs::write(&output_file, json) {
-            eprintln!("Error writing to {}: {}", output_file, err);
+    if let Some(output_path) = output_file {
+        if let Err(err) = std::fs::write(&output_path, json) {
+            eprintln!("Error writing to {}: {}", output_path, err);
             std::process::exit(1);
         }
-        eprintln!("Output written to {}", output_file);
+        eprintln!("Output written to {}", output_path);
     } else {
         println!("{}", json);
     }

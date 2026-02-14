@@ -22,7 +22,11 @@ cargo install --path .
 
 ## Usage
 
-### Generate strace output
+### Basic Usage
+
+The tool has two main subcommands: `parse` for existing strace files and `trace` for running strace directly.
+
+#### Parse existing strace output
 
 First, generate strace output with the required flags:
 
@@ -30,28 +34,54 @@ First, generate strace output with the required flags:
 strace -o trace.txt -t -k -f -s 1024 <command>
 ```
 
-Flag explanations:
+Then parse it:
+
+```bash
+# Basic parsing to stdout
+strace-tui parse trace.txt
+
+# Pretty-printed JSON
+strace-tui parse trace.txt --pretty
+
+# Resolve addresses to source locations
+strace-tui parse trace.txt --resolve --output parsed.json
+```
+
+#### Trace and parse in one command
+
+Run strace and parse the output automatically:
+
+```bash
+# Trace any command
+strace-tui trace <command> [args...]
+
+# Examples
+strace-tui trace ls -la
+strace-tui trace --pretty echo "Hello"
+strace-tui trace --resolve ./my_program arg1 arg2
+
+# Keep the intermediate strace file
+strace-tui trace --keep-trace --trace-file my_trace.txt ./my_program
+
+# Output to file
+strace-tui trace --output result.json python script.py
+```
+
+### Flag Explanations
+
+**strace flags** (used automatically by `trace` subcommand):
 - `-o trace.txt` - Write output to file
 - `-t` - Include timestamps
 - `-k` - Include kernel backtraces
 - `-f` - Follow forks (trace child processes)
 - `-s 1024` - Capture up to 1024 bytes of string arguments
 
-### Parse strace output
-
-```bash
-# Basic parsing to stdout
-strace-tui trace.txt
-
-# Pretty-printed JSON
-strace-tui trace.txt --pretty
-
-# Resolve addresses to source locations
-strace-tui trace.txt --resolve --output parsed.json
-
-# All options
-strace-tui trace.txt --resolve --pretty --output result.json
-```
+**strace-tui options**:
+- `--resolve` / `-r` - Resolve addresses to source locations using addr2line
+- `--pretty` / `-p` - Pretty-print JSON output
+- `--output <file>` / `-o <file>` - Write to file instead of stdout
+- `--keep-trace` - Keep intermediate strace file (trace subcommand only)
+- `--trace-file <file>` - Specify strace output file path (trace subcommand only)
 
 ## Output Format
 
@@ -108,7 +138,7 @@ use strace_tui::{StraceParser, Addr2LineResolver};
 fn main() {
     // Parse strace output
     let mut parser = StraceParser::new();
-    let entries = parser.parse_file("trace.txt").unwrap();
+    let mut entries = parser.parse_file("trace.txt").unwrap();
     
     println!("Parsed {} syscalls", entries.len());
     
@@ -126,6 +156,28 @@ fn main() {
         }
     }
 }
+```
+
+## CLI Examples
+
+```bash
+# Parse an existing trace file
+strace-tui parse my_trace.txt --pretty
+
+# Trace a simple command
+strace-tui trace echo "Hello, World!"
+
+# Trace with address resolution
+strace-tui trace --resolve ./my_program
+
+# Trace and save both strace output and JSON
+strace-tui trace --keep-trace --trace-file raw.txt --output parsed.json ./my_app
+
+# Trace with custom arguments
+strace-tui trace python3 -c "print('test')"
+
+# Parse with all features
+strace-tui parse existing_trace.txt --resolve --pretty --output result.json
 ```
 
 ## Development

@@ -14,12 +14,14 @@ cargo build --release
 
 ### Run
 ```bash
-# Parse strace output to JSON
-cargo run -- <strace-file> [options]
+# Parse existing strace file
+cargo run -- parse <strace-file> [options]
+cargo run -- parse /tmp/trace.txt --pretty
 
-# With options
-cargo run -- /tmp/strace.txt --pretty
-cargo run -- /tmp/strace.txt --resolve --output parsed.json
+# Trace a command and parse
+cargo run -- trace <command> [args...] [options]
+cargo run -- trace echo "Hello"
+cargo run -- trace --resolve ./my_program
 
 # Run example programs
 cargo run --example syscall_test
@@ -59,7 +61,9 @@ cargo fmt -- --check  # Check formatting without modifying files
 
 ### Current Structure
 - `src/lib.rs` - Library entry point, re-exports parser module
-- `src/main.rs` - CLI application for parsing strace output
+- `src/main.rs` - CLI application with two subcommands:
+  - `parse` - Parse existing strace output files
+  - `trace` - Run strace on a command and parse the output automatically
 - `src/parser/` - Core parsing logic
   - `mod.rs` - Parser orchestration and multi-line handling
   - `types.rs` - Data structures (SyscallEntry, BacktraceFrame, etc.)
@@ -70,6 +74,23 @@ cargo fmt -- --check  # Check formatting without modifying files
   - `syscall_test.rs` - Generates various syscalls for testing
   - `test_parser.rs` - Demonstrates parser usage
 - `tests/` - Integration tests
+
+### CLI Workflow
+
+**Parse Subcommand:**
+1. User provides existing strace file
+2. Parser reads and parses the file
+3. Optional: Resolve addresses with addr2line
+4. Output JSON to stdout or file
+
+**Trace Subcommand:**
+1. User provides command to trace
+2. CLI runs `strace -o tempfile -t -k -f -s 1024 <command>`
+3. Command executes (output goes to stdout/stderr as normal)
+4. CLI parses the generated strace output
+5. Optional: Resolve addresses with addr2line
+6. Output JSON to stdout or file
+7. Clean up temp file (unless `--keep-trace` specified)
 
 ### Parser Flow
 1. **Input**: strace output file (from `strace -o out.txt -t -k -f -s 1024 <cmd>`)

@@ -83,3 +83,81 @@ fn test_addr2line_resolver() {
     // Check caching works
     assert_eq!(resolver.cache_size(), 1);
 }
+
+#[test]
+fn test_cli_parse_subcommand() {
+    use std::process::Command;
+    use std::fs;
+    
+    // Create a sample trace file
+    let sample = r#"12345 10:20:30 write(1, "test\n", 5) = 5
+ > /usr/lib/libc.so.6(__write+0x14) [0x10e53e]
+12345 10:20:31 close(1) = 0
+"#;
+    
+    let temp_file = "/tmp/cli_test_trace.txt";
+    fs::write(temp_file, sample).unwrap();
+    
+    // Build first to ensure binary exists
+    Command::new("cargo")
+        .args(&["build", "--quiet"])
+        .status()
+        .expect("Failed to build");
+    
+    // Run the parse subcommand using the built binary
+    let output = Command::new("./target/debug/strace-tui")
+        .args(&["parse", temp_file])
+        .output()
+        .expect("Failed to run parse command");
+    
+    assert!(output.status.success(), "parse command should succeed");
+    
+    // Verify it's valid JSON
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&json_str)
+        .expect("Output should be valid JSON");
+    
+    // Check it has the expected structure
+    assert!(parsed["entries"].is_array());
+    assert!(parsed["summary"].is_object());
+    
+    fs::remove_file(temp_file).ok();
+}
+
+#[test]
+fn test_cli_trace_subcommand() {
+    use std::process::Command;
+    
+    // Build first to ensure binary exists
+    Command::new("cargo")
+        .args(&["build", "--quiet"])
+        .status()
+        .expect("Failed to build");
+    
+    // Run the trace subcommand with output to file to avoid mixing traced program output with JSON
+    let output = Command::new("./target/debug/strace-tui")
+        .args(&["trace", "--output", "/tmp/trace_test_output.json", "echo", "test"])
+        .output()
+        .expect("Failed to run trace command");
+    
+    // Command should succeed
+    assert!(output.status.success(), "trace command should succeed");
+    
+    // Read the output file
+    let json_str = std::fs::read_to_string("/tmp/trace_test_output.json")
+        .expect("Failed to read output file");
+    
+    let parsed: serde_json::Value = serde_json::from_str(&json_str)
+        .expect("Output should be valid JSON");
+    
+    // Check it has the expected structure
+    assert!(parsed["entries"].is_array());
+    assert!(parsed["summary"].is_object());
+    
+    // Should have some syscalls
+    let syscall_count = parsed["summary"]["total_syscalls"].as_u64().unwrap();
+    assert!(syscall_count > 0, "Should trace at least one syscall");
+    
+    // Clean up
+    std::fs::remove_file("/tmp/trace_test_output.json").ok();
+}
