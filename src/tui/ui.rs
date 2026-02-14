@@ -1,4 +1,4 @@
-use super::app::{App, DisplayLine};
+use super::app::{App, DisplayLine, split_arguments};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -276,11 +276,47 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
             
-            DisplayLine::Arguments { entry_idx } => {
+            DisplayLine::ArgumentsHeader { entry_idx } => {
                 let entry = &app.entries[*entry_idx];
-                let max_len = width.saturating_sub(18); // "  ├─ Arguments: "
-                let text = format!("  ├─ Arguments: {}", truncate(&entry.arguments, max_len));
+                let args_expanded = app.expanded_arguments.contains(entry_idx);
+                let args_arrow = if args_expanded { "▼" } else { "▶" };
+                let args = split_arguments(&entry.arguments);
+                let text = format!("  ├{} Arguments ({})", args_arrow, args.len());
                 Line::from(Span::styled(truncate_line(&text, width), Style::default().fg(Color::Gray)))
+            }
+            
+            DisplayLine::ArgumentLine { entry_idx, arg_idx } => {
+                let entry = &app.entries[*entry_idx];
+                let args = split_arguments(&entry.arguments);
+                if let Some(arg) = args.get(*arg_idx) {
+                    let is_last_arg = *arg_idx == args.len() - 1;
+                    
+                    // Check if there are more items after arguments section
+                    let has_more_items = entry.return_value.is_some() 
+                        || entry.errno.is_some() 
+                        || entry.duration.is_some()
+                        || entry.signal.is_some()
+                        || entry.exit_info.is_some()
+                        || !entry.backtrace.is_empty();
+                    
+                    // Use ├─ if there are more items after arguments, even for last arg
+                    // Add vertical continuation line │ for non-last args when there are more items
+                    let (prefix, tree_char) = if has_more_items {
+                        if is_last_arg {
+                            ("  │   ", "└─")
+                        } else {
+                            ("  │   ", "├─")
+                        }
+                    } else {
+                        ("      ", if is_last_arg { "└─" } else { "├─" })
+                    };
+                    
+                    let max_len = width.saturating_sub(10); // "  │   └─ "
+                    let text = format!("{}{} {}", prefix, tree_char, truncate(arg, max_len));
+                    Line::from(Span::styled(truncate_line(&text, width), Style::default().fg(Color::DarkGray)))
+                } else {
+                    continue;
+                }
             }
             
             DisplayLine::ReturnValue { entry_idx } => {

@@ -6,7 +6,8 @@ use super::process_graph::ProcessGraph;
 #[derive(Debug, Clone)]
 pub enum DisplayLine {
     SyscallHeader { entry_idx: usize },
-    Arguments { entry_idx: usize },
+    ArgumentsHeader { entry_idx: usize },
+    ArgumentLine { entry_idx: usize, arg_idx: usize },
     ReturnValue { entry_idx: usize },
     Error { entry_idx: usize },
     Duration { entry_idx: usize },
@@ -21,7 +22,8 @@ impl DisplayLine {
     fn entry_idx(&self) -> usize {
         match self {
             DisplayLine::SyscallHeader { entry_idx } => *entry_idx,
-            DisplayLine::Arguments { entry_idx } => *entry_idx,
+            DisplayLine::ArgumentsHeader { entry_idx } => *entry_idx,
+            DisplayLine::ArgumentLine { entry_idx, .. } => *entry_idx,
             DisplayLine::ReturnValue { entry_idx } => *entry_idx,
             DisplayLine::Error { entry_idx } => *entry_idx,
             DisplayLine::Duration { entry_idx } => *entry_idx,
@@ -47,6 +49,7 @@ pub struct App {
     pub selected_line: usize,
     pub scroll_offset: usize,
     pub expanded_items: HashSet<usize>,
+    pub expanded_arguments: HashSet<usize>,
     pub expanded_backtraces: HashSet<usize>,
     pub last_visible_height: usize, // Track for page scrolling
     
@@ -73,6 +76,7 @@ impl App {
             selected_line: 0,
             scroll_offset: 0,
             expanded_items: HashSet::new(),
+            expanded_arguments: HashSet::new(),
             expanded_backtraces: HashSet::new(),
             last_visible_height: 20, // Default, will be updated on first draw
             should_quit: false,
@@ -96,7 +100,18 @@ impl App {
             // Add expanded details if item is expanded
             if self.expanded_items.contains(&idx) {
                 if !entry.arguments.is_empty() {
-                    self.display_lines.push(DisplayLine::Arguments { entry_idx: idx });
+                    self.display_lines.push(DisplayLine::ArgumentsHeader { entry_idx: idx });
+                    
+                    // Add arguments if expanded
+                    if self.expanded_arguments.contains(&idx) {
+                        let args = split_arguments(&entry.arguments);
+                        for (arg_idx, _arg) in args.iter().enumerate() {
+                            self.display_lines.push(DisplayLine::ArgumentLine { 
+                                entry_idx: idx, 
+                                arg_idx 
+                            });
+                        }
+                    }
                 }
                 
                 if entry.return_value.is_some() {
@@ -314,6 +329,16 @@ impl App {
                 }
                 self.rebuild_display_lines();
             }
+            DisplayLine::ArgumentsHeader { entry_idx } => {
+                // Toggle arguments expansion
+                let idx = *entry_idx;
+                if self.expanded_arguments.contains(&idx) {
+                    self.expanded_arguments.remove(&idx);
+                } else {
+                    self.expanded_arguments.insert(idx);
+                }
+                self.rebuild_display_lines();
+            }
             _ => {
                 // For other line types, do nothing on Enter
             }
@@ -328,7 +353,14 @@ impl App {
         // Find the entry_idx of the current line and collapse it
         let entry_idx = match &self.display_lines[self.selected_line] {
             DisplayLine::SyscallHeader { entry_idx } => Some(*entry_idx),
-            DisplayLine::Arguments { entry_idx } => Some(*entry_idx),
+            DisplayLine::ArgumentsHeader { entry_idx } => {
+                // For arguments header, collapse just the arguments
+                let idx = *entry_idx;
+                self.expanded_arguments.remove(&idx);
+                self.rebuild_display_lines();
+                return;
+            }
+            DisplayLine::ArgumentLine { entry_idx, .. } => Some(*entry_idx),
             DisplayLine::ReturnValue { entry_idx } => Some(*entry_idx),
             DisplayLine::Error { entry_idx } => Some(*entry_idx),
             DisplayLine::Duration { entry_idx } => Some(*entry_idx),
@@ -347,6 +379,7 @@ impl App {
         
         if let Some(idx) = entry_idx {
             self.expanded_items.remove(&idx);
+            self.expanded_arguments.remove(&idx);
             self.expanded_backtraces.remove(&idx);
             self.rebuild_display_lines();
         }
@@ -387,6 +420,7 @@ impl App {
         let cursor_screen_pos = self.selected_line.saturating_sub(self.scroll_offset);
         
         self.expanded_items.clear();
+        self.expanded_arguments.clear();
         self.expanded_backtraces.clear();
         self.rebuild_display_lines();
         
@@ -409,7 +443,8 @@ impl App {
         // Find the entry_idx from the current line
         let entry_idx = match &self.display_lines[self.selected_line] {
             DisplayLine::SyscallHeader { entry_idx } => Some(*entry_idx),
-            DisplayLine::Arguments { entry_idx } => Some(*entry_idx),
+            DisplayLine::ArgumentsHeader { entry_idx } => Some(*entry_idx),
+            DisplayLine::ArgumentLine { entry_idx, .. } => Some(*entry_idx),
             DisplayLine::ReturnValue { entry_idx } => Some(*entry_idx),
             DisplayLine::Error { entry_idx } => Some(*entry_idx),
             DisplayLine::Duration { entry_idx } => Some(*entry_idx),
@@ -438,4 +473,64 @@ impl App {
         }
         self.rebuild_display_lines();
     }
+}
+
+/// Split arguments by comma, handling nested structures
+pub fn split_arguments(args: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0; // Track nesting depth for (), {}, []
+    let mut in_string = false;
+    let mut escape_next = false;
+    
+    for ch in args.chars() {
+        if escape_next {
+            current.push(ch);
+            escape_next = false;
+            continue;
+        }
+        
+        match ch {
+            '\\' => {
+                escape_next = true;
+                current.push(ch);
+            }
+            '"' => {
+                in_string = !in_string;
+                current.push(ch);
+            }
+            '(' | '{' | '[' if !in_string => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' | '}' | ']' if !in_string => {
+                depth -= 1;
+                current.push(ch);
+            }
+            ',' if !in_string && depth == 0 => {
+                // Split point
+                let trimmed = current.trim().to_string();
+                if !trimmed.is_empty() {
+                    result.push(trimmed);
+                }
+                current.clear();
+            }
+            _ => {
+                current.push(ch);
+            }
+        }
+    }
+    
+    // Don't forget the last argument
+    let trimmed = current.trim().to_string();
+    if !trimmed.is_empty() {
+        result.push(trimmed);
+    }
+    
+    // If we couldn't parse any arguments, return the whole string
+    if result.is_empty() && !args.trim().is_empty() {
+        result.push(args.trim().to_string());
+    }
+    
+    result
 }
