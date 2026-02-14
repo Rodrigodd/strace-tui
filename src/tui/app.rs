@@ -16,6 +16,23 @@ pub enum DisplayLine {
     BacktraceResolved { entry_idx: usize, frame_idx: usize },
 }
 
+impl DisplayLine {
+    fn entry_idx(&self) -> usize {
+        match self {
+            DisplayLine::SyscallHeader { entry_idx } => *entry_idx,
+            DisplayLine::Arguments { entry_idx } => *entry_idx,
+            DisplayLine::ReturnValue { entry_idx } => *entry_idx,
+            DisplayLine::Error { entry_idx } => *entry_idx,
+            DisplayLine::Duration { entry_idx } => *entry_idx,
+            DisplayLine::Signal { entry_idx } => *entry_idx,
+            DisplayLine::Exit { entry_idx } => *entry_idx,
+            DisplayLine::BacktraceHeader { entry_idx } => *entry_idx,
+            DisplayLine::BacktraceFrame { entry_idx, .. } => *entry_idx,
+            DisplayLine::BacktraceResolved { entry_idx, .. } => *entry_idx,
+        }
+    }
+}
+
 pub struct App {
     // Data
     pub entries: Vec<SyscallEntry>,
@@ -329,16 +346,52 @@ impl App {
     }
 
     fn expand_all(&mut self) {
+        // Remember which entry we're currently on and cursor position on screen
+        let current_entry_idx = if self.selected_line < self.display_lines.len() {
+            Some(self.display_lines[self.selected_line].entry_idx())
+        } else {
+            None
+        };
+        let cursor_screen_pos = self.selected_line.saturating_sub(self.scroll_offset);
+        
         for i in 0..self.entries.len() {
             self.expanded_items.insert(i);
         }
         self.rebuild_display_lines();
+        
+        // Restore cursor to the same entry
+        if let Some(entry_idx) = current_entry_idx {
+            self.selected_line = self.display_lines.iter()
+                .position(|line| line.entry_idx() == entry_idx)
+                .unwrap_or(0);
+            
+            // Restore cursor screen position
+            self.scroll_offset = self.selected_line.saturating_sub(cursor_screen_pos);
+        }
     }
 
     fn collapse_all(&mut self) {
+        // Remember which entry we're currently on and cursor position on screen
+        let current_entry_idx = if self.selected_line < self.display_lines.len() {
+            Some(self.display_lines[self.selected_line].entry_idx())
+        } else {
+            None
+        };
+        let cursor_screen_pos = self.selected_line.saturating_sub(self.scroll_offset);
+        
         self.expanded_items.clear();
         self.expanded_backtraces.clear();
         self.rebuild_display_lines();
+        
+        // Restore cursor to the same entry (should be header line)
+        if let Some(entry_idx) = current_entry_idx {
+            self.selected_line = self.display_lines.iter()
+                .position(|line| line.entry_idx() == entry_idx)
+                .unwrap_or(0);
+            
+            // Restore cursor screen position
+            self.scroll_offset = self.selected_line.saturating_sub(cursor_screen_pos);
+        }
     }
 
     fn resolve_current_backtrace(&mut self) {
