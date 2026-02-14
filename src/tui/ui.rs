@@ -72,6 +72,7 @@ fn draw_divider(f: &mut Frame, area: Rect) {
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     use super::app::DisplayLine;
+    use super::syscall_colors::syscall_category_color;
     
     // Calculate scroll offset to keep selected item visible
     let visible_height = area.height as usize; // No borders, use full height
@@ -93,59 +94,112 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     for line_idx in start..end {
         let display_line = &app.display_lines[line_idx];
         
-        let (line_text, line_style) = match display_line {
+        let line_content = match display_line {
             DisplayLine::SyscallHeader { entry_idx } => {
                 let entry = &app.entries[*entry_idx];
                 let is_expanded = app.expanded_items.contains(entry_idx);
                 let arrow = if is_expanded { "▼" } else { "▶" };
                 
-                let syscall_info = if entry.signal.is_some() {
-                    format!("--- {} ---", entry.syscall_name.to_uppercase())
-                } else if entry.exit_info.is_some() {
-                    format!("+++ {} +++", entry.syscall_name)
+                // Determine base style for special cases
+                let has_error = entry.errno.is_some();
+                let is_signal = entry.signal.is_some();
+                let is_exit = entry.exit_info.is_some();
+                
+                // For signals and exits, keep the old behavior (whole line colored)
+                if is_signal || is_exit {
+                    let syscall_info = if is_signal {
+                        format!("--- {} ---", entry.syscall_name.to_uppercase())
+                    } else {
+                        format!("+++ {} +++", entry.syscall_name)
+                    };
+                    
+                    let metadata = format!("[{}] {}", entry.pid, entry.timestamp);
+                    let metadata_len = metadata.chars().count();
+                    let left_part = format!("{} {}", arrow, syscall_info);
+                    let left_len = left_part.chars().count();
+                    
+                    let text = if left_len + 1 + metadata_len <= width {
+                        let padding = width.saturating_sub(left_len + metadata_len);
+                        format!("{}{:padding$}{}", left_part, "", metadata, padding = padding)
+                    } else {
+                        let available_for_left = width.saturating_sub(metadata_len + 1);
+                        let truncated_left = truncate_line(&left_part, available_for_left);
+                        format!("{} {}", truncated_left, metadata)
+                    };
+                    
+                    let color = if is_signal { Color::Yellow } else { Color::Cyan };
+                    Line::from(Span::styled(truncate_line(&text, width), Style::default().fg(color)))
                 } else {
+                    // Normal syscall - color the syscall name, rest is white or red
                     let args_preview = truncate(&entry.arguments, 30);
                     let ret = entry.return_value.as_deref().unwrap_or("?");
-                    format!("{}({}) = {}", entry.syscall_name, args_preview, ret)
-                };
-
-                // Right-aligned metadata: [PID] time
-                let metadata = format!("[{}] {}", entry.pid, entry.timestamp);
-                let metadata_len = metadata.chars().count();
-                
-                // Left side: arrow + space + syscall_info
-                let left_part = format!("{} {}", arrow, syscall_info);
-                let left_len = left_part.chars().count();
-                
-                // Calculate padding needed
-                let text = if left_len + 1 + metadata_len <= width {
-                    // Enough space: left + padding + right
-                    let padding = width.saturating_sub(left_len + metadata_len);
-                    format!("{}{:padding$}{}", left_part, "", metadata, padding = padding)
-                } else {
-                    // Not enough space: truncate left part
-                    let available_for_left = width.saturating_sub(metadata_len + 1);
-                    let truncated_left = truncate_line(&left_part, available_for_left);
-                    format!("{} {}", truncated_left, metadata)
-                };
-                
-                let mut style = Style::default();
-                if entry.errno.is_some() {
-                    style = style.fg(Color::Red);
-                } else if entry.signal.is_some() {
-                    style = style.fg(Color::Yellow);
-                } else if entry.exit_info.is_some() {
-                    style = style.fg(Color::Cyan);
+                    
+                    // Build the parts
+                    let arrow_str = format!("{} ", arrow);
+                    let syscall_name = &entry.syscall_name;
+                    let args_and_ret = format!("({}) = {}", args_preview, ret);
+                    let metadata = format!("[{}] {}", entry.pid, entry.timestamp);
+                    
+                    // Calculate lengths
+                    let arrow_len = arrow_str.chars().count();
+                    let syscall_len = syscall_name.chars().count();
+                    let args_ret_len = args_and_ret.chars().count();
+                    let metadata_len = metadata.chars().count();
+                    let left_total = arrow_len + syscall_len + args_ret_len;
+                    
+                    // Determine colors
+                    let syscall_color = syscall_category_color(syscall_name);
+                    let rest_color = if has_error { Color::Red } else { Color::White };
+                    
+                    if left_total + 1 + metadata_len <= width {
+                        // Enough space - build with padding
+                        let padding_len = width.saturating_sub(left_total + metadata_len);
+                        let padding = " ".repeat(padding_len);
+                        
+                        Line::from(vec![
+                            Span::styled(arrow_str, Style::default().fg(rest_color)),
+                            Span::styled(syscall_name.to_string(), Style::default().fg(syscall_color)),
+                            Span::styled(args_and_ret, Style::default().fg(rest_color)),
+                            Span::styled(padding, Style::default()),
+                            Span::styled(metadata, Style::default().fg(rest_color)),
+                        ])
+                    } else {
+                        // Not enough space - need to truncate
+                        let available_for_left = width.saturating_sub(metadata_len + 1);
+                        
+                        // Try to show as much as possible
+                        if arrow_len + syscall_len + 5 <= available_for_left {
+                            // Can show syscall name and some args
+                            let available_for_args = available_for_left.saturating_sub(arrow_len + syscall_len);
+                            let truncated_args = truncate_line(&args_and_ret, available_for_args);
+                            
+                            Line::from(vec![
+                                Span::styled(arrow_str, Style::default().fg(rest_color)),
+                                Span::styled(syscall_name.to_string(), Style::default().fg(syscall_color)),
+                                Span::styled(truncated_args, Style::default().fg(rest_color)),
+                                Span::styled(" ", Style::default()),
+                                Span::styled(metadata, Style::default().fg(rest_color)),
+                            ])
+                        } else {
+                            // Very limited space - truncate syscall name too
+                            let left_part = format!("{}{}{}", arrow_str, syscall_name, args_and_ret);
+                            let truncated = truncate_line(&left_part, available_for_left);
+                            
+                            Line::from(vec![
+                                Span::styled(truncated, Style::default().fg(rest_color)),
+                                Span::styled(" ", Style::default()),
+                                Span::styled(metadata, Style::default().fg(rest_color)),
+                            ])
+                        }
+                    }
                 }
-                
-                (truncate_line(&text, width), style)
             }
             
             DisplayLine::Arguments { entry_idx } => {
                 let entry = &app.entries[*entry_idx];
                 let max_len = width.saturating_sub(18); // "  ├─ Arguments: "
                 let text = format!("  ├─ Arguments: {}", truncate(&entry.arguments, max_len));
-                (truncate_line(&text, width), Style::default().fg(Color::Gray))
+                Line::from(Span::styled(truncate_line(&text, width), Style::default().fg(Color::Gray)))
             }
             
             DisplayLine::ReturnValue { entry_idx } => {
@@ -155,19 +209,19 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 } else {
                     format!("  ├─ Return: {}", entry.return_value.as_deref().unwrap_or("?"))
                 };
-                let ret_style = if entry.errno.is_some() {
-                    Style::default().fg(Color::Red)
+                let ret_color = if entry.errno.is_some() {
+                    Color::Red
                 } else {
-                    Style::default().fg(Color::Green)
+                    Color::Green
                 };
-                (truncate_line(&ret_text, width), ret_style)
+                Line::from(Span::styled(truncate_line(&ret_text, width), Style::default().fg(ret_color)))
             }
             
             DisplayLine::Error { entry_idx } => {
                 let entry = &app.entries[*entry_idx];
                 if let Some(ref errno) = entry.errno {
                     let text = format!("  ├─ Error: {} ({})", errno.code, errno.message);
-                    (truncate_line(&text, width), Style::default().fg(Color::Red))
+                    Line::from(Span::styled(truncate_line(&text, width), Style::default().fg(Color::Red)))
                 } else {
                     continue;
                 }
@@ -177,7 +231,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let entry = &app.entries[*entry_idx];
                 if let Some(dur) = entry.duration {
                     let text = format!("  ├─ Duration: {:.6}s", dur);
-                    (truncate_line(&text, width), Style::default().fg(Color::Gray))
+                    Line::from(Span::styled(truncate_line(&text, width), Style::default().fg(Color::Gray)))
                 } else {
                     continue;
                 }
@@ -188,7 +242,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 if let Some(ref signal) = entry.signal {
                     let max_len = width.saturating_sub(15); // "  ├─ Signal: "
                     let text = format!("  ├─ Signal: {} - {}", signal.signal_name, truncate(&signal.details, max_len));
-                    (truncate_line(&text, width), Style::default().fg(Color::Yellow))
+                    Line::from(Span::styled(truncate_line(&text, width), Style::default().fg(Color::Yellow)))
                 } else {
                     continue;
                 }
@@ -202,7 +256,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     } else {
                         format!("  └─ Exited with code {}", exit.code)
                     };
-                    (truncate_line(&text, width), Style::default().fg(Color::Cyan))
+                    Line::from(Span::styled(truncate_line(&text, width), Style::default().fg(Color::Cyan)))
                 } else {
                     continue;
                 }
@@ -213,7 +267,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let bt_expanded = app.expanded_backtraces.contains(entry_idx);
                 let bt_arrow = if bt_expanded { "▼" } else { "▶" };
                 let text = format!("  └{} Backtrace ({} frames)", bt_arrow, entry.backtrace.len());
-                (truncate_line(&text, width), Style::default().fg(Color::Magenta))
+                Line::from(Span::styled(truncate_line(&text, width), Style::default().fg(Color::Magenta)))
             }
             
             DisplayLine::BacktraceFrame { entry_idx, frame_idx } => {
@@ -240,7 +294,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     func_info,
                     frame.address
                 );
-                (truncate_line(&text, width), Style::default().fg(Color::DarkGray))
+                Line::from(Span::styled(truncate_line(&text, width), Style::default().fg(Color::DarkGray)))
             }
             
             DisplayLine::BacktraceResolved { entry_idx, frame_idx } => {
@@ -253,15 +307,14 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                         truncate(&resolved.file, max_file_len),
                         resolved.line
                     );
-                    (truncate_line(&text, width), Style::default().fg(Color::Green))
+                    Line::from(Span::styled(truncate_line(&text, width), Style::default().fg(Color::Green)))
                 } else {
                     continue;
                 }
             }
         };
         
-        // Don't apply highlight here - let ListState handle it
-        items.push(ListItem::new(line_text).style(line_style));
+        items.push(ListItem::new(line_content));
     }
 
     let list = List::new(items)

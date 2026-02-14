@@ -1,6 +1,7 @@
 mod app;
 mod ui;
 mod events;
+mod syscall_colors;
 
 pub use app::App;
 use events::EventHandler;
