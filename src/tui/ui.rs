@@ -86,6 +86,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     // Only render items in the visible window
     let start = app.scroll_offset;
     let end = (app.scroll_offset + visible_height).min(app.display_lines.len());
+    let width = area.width as usize;
     
     for line_idx in start..end {
         let display_line = &app.display_lines[line_idx];
@@ -101,7 +102,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 } else if entry.exit_info.is_some() {
                     format!("+++ {} +++", entry.syscall_name)
                 } else {
-                    let args_preview = truncate(&entry.arguments, 40);
+                    let args_preview = truncate(&entry.arguments, 30);
                     let ret = entry.return_value.as_deref().unwrap_or("?");
                     format!("{}({}) = {}", entry.syscall_name, args_preview, ret)
                 };
@@ -123,13 +124,14 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     style = style.fg(Color::Cyan);
                 }
                 
-                (text, style)
+                (truncate_line(&text, width), style)
             }
             
             DisplayLine::Arguments { entry_idx } => {
                 let entry = &app.entries[*entry_idx];
-                let text = format!("  ├─ Arguments: {}", truncate(&entry.arguments, 80));
-                (text, Style::default().fg(Color::Gray))
+                let max_len = width.saturating_sub(18); // "  ├─ Arguments: "
+                let text = format!("  ├─ Arguments: {}", truncate(&entry.arguments, max_len));
+                (truncate_line(&text, width), Style::default().fg(Color::Gray))
             }
             
             DisplayLine::ReturnValue { entry_idx } => {
@@ -144,14 +146,14 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 } else {
                     Style::default().fg(Color::Green)
                 };
-                (ret_text, ret_style)
+                (truncate_line(&ret_text, width), ret_style)
             }
             
             DisplayLine::Error { entry_idx } => {
                 let entry = &app.entries[*entry_idx];
                 if let Some(ref errno) = entry.errno {
                     let text = format!("  ├─ Error: {} ({})", errno.code, errno.message);
-                    (text, Style::default().fg(Color::Red))
+                    (truncate_line(&text, width), Style::default().fg(Color::Red))
                 } else {
                     continue;
                 }
@@ -161,7 +163,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let entry = &app.entries[*entry_idx];
                 if let Some(dur) = entry.duration {
                     let text = format!("  ├─ Duration: {:.6}s", dur);
-                    (text, Style::default().fg(Color::Gray))
+                    (truncate_line(&text, width), Style::default().fg(Color::Gray))
                 } else {
                     continue;
                 }
@@ -170,8 +172,9 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             DisplayLine::Signal { entry_idx } => {
                 let entry = &app.entries[*entry_idx];
                 if let Some(ref signal) = entry.signal {
-                    let text = format!("  ├─ Signal: {} - {}", signal.signal_name, truncate(&signal.details, 60));
-                    (text, Style::default().fg(Color::Yellow))
+                    let max_len = width.saturating_sub(15); // "  ├─ Signal: "
+                    let text = format!("  ├─ Signal: {} - {}", signal.signal_name, truncate(&signal.details, max_len));
+                    (truncate_line(&text, width), Style::default().fg(Color::Yellow))
                 } else {
                     continue;
                 }
@@ -185,7 +188,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     } else {
                         format!("  └─ Exited with code {}", exit.code)
                     };
-                    (text, Style::default().fg(Color::Cyan))
+                    (truncate_line(&text, width), Style::default().fg(Color::Cyan))
                 } else {
                     continue;
                 }
@@ -196,7 +199,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let bt_expanded = app.expanded_backtraces.contains(entry_idx);
                 let bt_arrow = if bt_expanded { "▼" } else { "▶" };
                 let text = format!("  └{} Backtrace ({} frames)", bt_arrow, entry.backtrace.len());
-                (text, Style::default().fg(Color::Magenta))
+                (truncate_line(&text, width), Style::default().fg(Color::Magenta))
             }
             
             DisplayLine::BacktraceFrame { entry_idx, frame_idx } => {
@@ -215,26 +218,28 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     String::new()
                 };
 
+                let max_binary_len = width.saturating_sub(20); // Account for tree chars, spaces, etc.
                 let text = format!(
                     "      {} {}{} [{}]",
                     tree_char,
-                    truncate(&frame.binary, 50),
+                    truncate(&frame.binary, max_binary_len),
                     func_info,
                     frame.address
                 );
-                (text, Style::default().fg(Color::DarkGray))
+                (truncate_line(&text, width), Style::default().fg(Color::DarkGray))
             }
             
             DisplayLine::BacktraceResolved { entry_idx, frame_idx } => {
                 let entry = &app.entries[*entry_idx];
                 let frame = &entry.backtrace[*frame_idx];
                 if let Some(ref resolved) = frame.resolved {
+                    let max_file_len = width.saturating_sub(20); // Account for prefix and line number
                     let text = format!(
                         "          → {}:{}",
-                        truncate(&resolved.file, 60),
+                        truncate(&resolved.file, max_file_len),
                         resolved.line
                     );
-                    (text, Style::default().fg(Color::Green))
+                    (truncate_line(&text, width), Style::default().fg(Color::Green))
                 } else {
                     continue;
                 }
@@ -309,6 +314,22 @@ fn truncate(s: &str, max_len: usize) -> String {
         s.to_string()
     } else {
         format!("{}...", &s[..max_len.saturating_sub(3)])
+    }
+}
+
+fn truncate_line(s: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    
+    // Count actual character width (not bytes)
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= width {
+        s.to_string()
+    } else {
+        let truncate_at = width.saturating_sub(3);
+        let truncated: String = chars.iter().take(truncate_at).collect();
+        format!("{}...", truncated)
     }
 }
 
