@@ -109,13 +109,25 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     format!("{}({}) = {}", entry.syscall_name, args_preview, ret)
                 };
 
-                let text = format!(
-                    "{} {} [{}] {}",
-                    arrow,
-                    syscall_info,
-                    entry.pid,
-                    entry.timestamp
-                );
+                // Right-aligned metadata: [PID] time
+                let metadata = format!("[{}] {}", entry.pid, entry.timestamp);
+                let metadata_len = metadata.chars().count();
+                
+                // Left side: arrow + space + syscall_info
+                let left_part = format!("{} {}", arrow, syscall_info);
+                let left_len = left_part.chars().count();
+                
+                // Calculate padding needed
+                let text = if left_len + 1 + metadata_len <= width {
+                    // Enough space: left + padding + right
+                    let padding = width.saturating_sub(left_len + metadata_len);
+                    format!("{}{:padding$}{}", left_part, "", metadata, padding = padding)
+                } else {
+                    // Not enough space: truncate left part
+                    let available_for_left = width.saturating_sub(metadata_len + 1);
+                    let truncated_left = truncate_line(&left_part, available_for_left);
+                    format!("{} {}", truncated_left, metadata)
+                };
                 
                 let mut style = Style::default();
                 if entry.errno.is_some() {
