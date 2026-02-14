@@ -104,13 +104,17 @@ impl ProcessGraph {
             .unwrap_or(Color::White)
     }
     
-    pub fn render_graph_for_entry(&self, entry_idx: usize, entry: &SyscallEntry) -> String {
+    pub fn get_color_for_column(&self, column: usize) -> Color {
+        GRAPH_COLORS[column % GRAPH_COLORS.len()]
+    }
+    
+    pub fn render_graph_for_entry(&self, entry_idx: usize, entry: &SyscallEntry) -> Vec<(char, Color)> {
         if !self.enabled {
-            return String::new();
+            return Vec::new();
         }
         
         let pid = entry.pid;
-        let mut graph = String::new();
+        let mut graph = Vec::new();
         
         // Check if this is a fork
         let is_fork = matches!(entry.syscall_name.as_str(), "fork" | "vfork" | "clone" | "clone3");
@@ -141,8 +145,9 @@ impl ProcessGraph {
         
         let current_column = self.processes.get(&pid).map(|p| p.column).unwrap_or(0);
         
-        // Build graph string column by column
+        // Build graph with colored characters column by column
         for col in 0..self.max_columns {
+            let col_color = self.get_color_for_column(col);
             if let Some(child) = child_pid {
                 let child_column = self.processes.get(&child).map(|p| p.column).unwrap_or(0);
                 
@@ -152,15 +157,15 @@ impl ProcessGraph {
                 let max_col = current_column.max(child_column);
                 
                 if col == current_column {
-                    graph.push('*');
+                    graph.push(('*', col_color));
                 } else if col > min_col && col < max_col {
-                    graph.push('─');
+                    graph.push(('─', col_color));
                 } else if col == child_column {
-                    graph.push('┐');
+                    graph.push(('┐', col_color));
                 } else if self.is_active_at(col, entry_idx) {
-                    graph.push('│');
+                    graph.push(('│', col_color));
                 } else {
-                    graph.push(' ');
+                    graph.push((' ', col_color));
                 }
             } else if let Some(waited) = waited_pid {
                 let waited_column = self.processes.get(&waited).map(|p| p.column).unwrap_or(0);
@@ -171,24 +176,24 @@ impl ProcessGraph {
                 let max_col = current_column.max(waited_column);
                 
                 if col == current_column {
-                    graph.push('*');
+                    graph.push(('*', col_color));
                 } else if col > min_col && col < max_col {
-                    graph.push('─');
+                    graph.push(('─', col_color));
                 } else if col == waited_column {
-                    graph.push('┘');
+                    graph.push(('┘', col_color));
                 } else if self.is_active_at(col, entry_idx) {
-                    graph.push('│');
+                    graph.push(('│', col_color));
                 } else {
-                    graph.push(' ');
+                    graph.push((' ', col_color));
                 }
             } else {
                 // Normal line: show active processes
                 if col == current_column {
-                    graph.push('*');
+                    graph.push(('*', col_color));
                 } else if self.is_active_at(col, entry_idx) {
-                    graph.push('│');
+                    graph.push(('│', col_color));
                 } else {
-                    graph.push(' ');
+                    graph.push((' ', col_color));
                 }
             }
         }

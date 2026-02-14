@@ -114,57 +114,82 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     };
                     
                     // Get graph for this entry
-                    let graph = app.process_graph.render_graph_for_entry(*entry_idx, entry);
-                    let graph_with_spaces = if !graph.is_empty() {
-                        format!("  {}  ", graph)
-                    } else {
-                        String::new()
-                    };
+                    let graph_chars = app.process_graph.render_graph_for_entry(*entry_idx, entry);
+                    let has_graph = !graph_chars.is_empty();
+                    let graph_len = if has_graph { graph_chars.len() + 4 } else { 0 }; // +4 for "  "+"  "
                     
                     let pid_color = app.process_graph.get_color(entry.pid);
-                    let metadata = format!("[{}] {}", entry.pid, entry.timestamp);
-                    let metadata_len = metadata.chars().count();
-                    let graph_len = graph_with_spaces.chars().count();
                     let left_part = format!("{} {}", arrow, syscall_info);
                     let left_len = left_part.chars().count();
                     
-                    let text = if left_len + graph_len + metadata_len <= width {
-                        let padding = width.saturating_sub(left_len + graph_len + metadata_len);
-                        format!("{}{:padding$}{}{}", left_part, "", graph_with_spaces, metadata, padding = padding)
+                    let metadata_pid = format!("[{}]", entry.pid);
+                    let metadata_time = format!(" {}", entry.timestamp);
+                    let metadata_len = metadata_pid.chars().count() + metadata_time.chars().count();
+                    
+                    let color = if is_signal { Color::Yellow } else { Color::Cyan };
+                    
+                    if left_len + graph_len + metadata_len <= width {
+                        let padding_len = width.saturating_sub(left_len + graph_len + metadata_len);
+                        let padding = " ".repeat(padding_len);
+                        
+                        let mut spans = vec![Span::styled(left_part, Style::default().fg(color))];
+                        spans.push(Span::styled(padding, Style::default()));
+                        
+                        if has_graph {
+                            spans.push(Span::raw("  "));
+                            for (ch, ch_color) in graph_chars {
+                                spans.push(Span::styled(ch.to_string(), Style::default().fg(ch_color)));
+                            }
+                            spans.push(Span::raw("  "));
+                        }
+                        
+                        spans.push(Span::styled(metadata_pid, Style::default().fg(pid_color)));
+                        spans.push(Span::styled(metadata_time, Style::default().fg(color)));
+                        
+                        Line::from(spans)
                     } else {
                         let available_for_left = width.saturating_sub(graph_len + metadata_len + 1);
                         let truncated_left = truncate_line(&left_part, available_for_left);
-                        format!("{} {}{}", truncated_left, graph_with_spaces, metadata)
-                    };
-                    
-                    let color = if is_signal { Color::Yellow } else { Color::Cyan };
-                    Line::from(Span::styled(truncate_line(&text, width), Style::default().fg(color)))
+                        
+                        let mut spans = vec![Span::styled(truncated_left, Style::default().fg(color))];
+                        spans.push(Span::raw(" "));
+                        
+                        if has_graph {
+                            spans.push(Span::raw("  "));
+                            for (ch, ch_color) in graph_chars {
+                                spans.push(Span::styled(ch.to_string(), Style::default().fg(ch_color)));
+                            }
+                            spans.push(Span::raw("  "));
+                        }
+                        
+                        spans.push(Span::styled(metadata_pid, Style::default().fg(pid_color)));
+                        spans.push(Span::styled(metadata_time, Style::default().fg(color)));
+                        
+                        Line::from(spans)
+                    }
                 } else {
                     // Normal syscall - color the syscall name, rest is white or red
                     let args_preview = truncate(&entry.arguments, 30);
                     let ret = entry.return_value.as_deref().unwrap_or("?");
                     
                     // Get graph for this entry
-                    let graph = app.process_graph.render_graph_for_entry(*entry_idx, entry);
-                    let graph_with_spaces = if !graph.is_empty() {
-                        format!("  {}  ", graph)
-                    } else {
-                        String::new()
-                    };
+                    let graph_chars = app.process_graph.render_graph_for_entry(*entry_idx, entry);
+                    let has_graph = !graph_chars.is_empty();
+                    let graph_len = if has_graph { graph_chars.len() + 4 } else { 0 }; // +4 for "  "+"  "
                     
                     // Build the parts
                     let arrow_str = format!("{} ", arrow);
                     let syscall_name = &entry.syscall_name;
                     let args_and_ret = format!("({}) = {}", args_preview, ret);
                     let pid_color = app.process_graph.get_color(entry.pid);
-                    let metadata = format!("[{}] {}", entry.pid, entry.timestamp);
+                    let metadata_pid = format!("[{}]", entry.pid);
+                    let metadata_time = format!(" {}", entry.timestamp);
                     
                     // Calculate lengths
                     let arrow_len = arrow_str.chars().count();
                     let syscall_len = syscall_name.chars().count();
                     let args_ret_len = args_and_ret.chars().count();
-                    let graph_len = graph_with_spaces.chars().count();
-                    let metadata_len = metadata.chars().count();
+                    let metadata_len = metadata_pid.chars().count() + metadata_time.chars().count();
                     let left_total = arrow_len + syscall_len + args_ret_len;
                     
                     // Determine colors
@@ -176,14 +201,25 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                         let padding_len = width.saturating_sub(left_total + graph_len + metadata_len);
                         let padding = " ".repeat(padding_len);
                         
-                        Line::from(vec![
+                        let mut spans = vec![
                             Span::styled(arrow_str, Style::default().fg(rest_color)),
                             Span::styled(syscall_name.to_string(), Style::default().fg(syscall_color)),
                             Span::styled(args_and_ret, Style::default().fg(rest_color)),
                             Span::styled(padding, Style::default()),
-                            Span::styled(graph_with_spaces, Style::default().fg(Color::DarkGray)),
-                            Span::styled(metadata, Style::default().fg(rest_color)),
-                        ])
+                        ];
+                        
+                        if has_graph {
+                            spans.push(Span::raw("  "));
+                            for (ch, ch_color) in graph_chars {
+                                spans.push(Span::styled(ch.to_string(), Style::default().fg(ch_color)));
+                            }
+                            spans.push(Span::raw("  "));
+                        }
+                        
+                        spans.push(Span::styled(metadata_pid, Style::default().fg(pid_color)));
+                        spans.push(Span::styled(metadata_time, Style::default().fg(rest_color)));
+                        
+                        Line::from(spans)
                     } else {
                         // Not enough space - need to truncate
                         let available_for_left = width.saturating_sub(graph_len + metadata_len + 1);
@@ -194,25 +230,47 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                             let available_for_args = available_for_left.saturating_sub(arrow_len + syscall_len);
                             let truncated_args = truncate_line(&args_and_ret, available_for_args);
                             
-                            Line::from(vec![
+                            let mut spans = vec![
                                 Span::styled(arrow_str, Style::default().fg(rest_color)),
                                 Span::styled(syscall_name.to_string(), Style::default().fg(syscall_color)),
                                 Span::styled(truncated_args, Style::default().fg(rest_color)),
                                 Span::styled(" ", Style::default()),
-                                Span::styled(graph_with_spaces, Style::default().fg(Color::DarkGray)),
-                                Span::styled(metadata, Style::default().fg(rest_color)),
-                            ])
+                            ];
+                            
+                            if has_graph {
+                                spans.push(Span::raw("  "));
+                                for (ch, ch_color) in graph_chars {
+                                    spans.push(Span::styled(ch.to_string(), Style::default().fg(ch_color)));
+                                }
+                                spans.push(Span::raw("  "));
+                            }
+                            
+                            spans.push(Span::styled(metadata_pid, Style::default().fg(pid_color)));
+                            spans.push(Span::styled(metadata_time, Style::default().fg(rest_color)));
+                            
+                            Line::from(spans)
                         } else {
                             // Very limited space - truncate syscall name too
                             let left_part = format!("{}{}{}", arrow_str, syscall_name, args_and_ret);
                             let truncated = truncate_line(&left_part, available_for_left);
                             
-                            Line::from(vec![
+                            let mut spans = vec![
                                 Span::styled(truncated, Style::default().fg(rest_color)),
                                 Span::styled(" ", Style::default()),
-                                Span::styled(graph_with_spaces, Style::default().fg(Color::DarkGray)),
-                                Span::styled(metadata, Style::default().fg(rest_color)),
-                            ])
+                            ];
+                            
+                            if has_graph {
+                                spans.push(Span::raw("  "));
+                                for (ch, ch_color) in graph_chars {
+                                    spans.push(Span::styled(ch.to_string(), Style::default().fg(ch_color)));
+                                }
+                                spans.push(Span::raw("  "));
+                            }
+                            
+                            spans.push(Span::styled(metadata_pid, Style::default().fg(pid_color)));
+                            spans.push(Span::styled(metadata_time, Style::default().fg(rest_color)));
+                            
+                            Line::from(spans)
                         }
                     }
                 }
