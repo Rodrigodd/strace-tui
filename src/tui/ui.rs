@@ -382,10 +382,14 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let entry = &app.entries[*entry_idx];
                 let frame = &entry.backtrace[*frame_idx];
                 if let Some(ref resolved) = frame.resolved {
+                    let is_last = *frame_idx == entry.backtrace.len() - 1;
+                    let tree_char = if is_last { "└─" } else { "├─" };
+                    
                     let max_file_len = width.saturating_sub(20); // Account for prefix and line number
                     let text = format!(
-                        "          → {}:{}",
-                        truncate(&resolved.file, max_file_len),
+                        "      {} {}:{}",
+                        tree_char,
+                        truncate_path_start(&resolved.file, max_file_len),
                         resolved.line
                     );
                     Line::from(Span::styled(truncate_line(&text, width), Style::default().fg(Color::Green)))
@@ -465,6 +469,23 @@ fn truncate(s: &str, max_len: usize) -> String {
     } else {
         format!("{}...", &s[..max_len.saturating_sub(3)])
     }
+}
+
+fn truncate_path_start(path: &str, max_len: usize) -> String {
+    if path.len() <= max_len {
+        return path.to_string();
+    }
+    
+    // Truncate from the start, keeping the end (filename)
+    let chars: Vec<char> = path.chars().collect();
+    if chars.len() <= max_len {
+        return path.to_string();
+    }
+    
+    let keep_chars = max_len.saturating_sub(3); // Reserve 3 for "..."
+    let skip_chars = chars.len() - keep_chars;
+    let truncated: String = chars.iter().skip(skip_chars).collect();
+    format!("...{}", truncated)
 }
 
 fn truncate_line(s: &str, width: usize) -> String {

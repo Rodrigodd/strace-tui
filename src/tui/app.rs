@@ -126,12 +126,14 @@ impl App {
                     // Add backtrace frames if expanded
                     if self.expanded_backtraces.contains(&idx) {
                         for (frame_idx, frame) in entry.backtrace.iter().enumerate() {
-                            self.display_lines.push(DisplayLine::BacktraceFrame { 
-                                entry_idx: idx, 
-                                frame_idx 
-                            });
-                            
-                            if frame.resolved.is_some() {
+                            // Only show raw frame if NOT resolved
+                            if frame.resolved.is_none() {
+                                self.display_lines.push(DisplayLine::BacktraceFrame { 
+                                    entry_idx: idx, 
+                                    frame_idx 
+                                });
+                            } else {
+                                // Show resolved version instead
                                 self.display_lines.push(DisplayLine::BacktraceResolved { 
                                     entry_idx: idx, 
                                     frame_idx 
