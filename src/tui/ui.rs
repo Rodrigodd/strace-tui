@@ -720,8 +720,22 @@ fn draw_filter_modal(f: &mut Frame, app: &App) {
     let modal_state = &app.filter_modal_state;
     let area = centered_rect(70, 70, f.area());
     
-    // Calculate visible window (account for borders)
-    let visible_height = area.height.saturating_sub(2) as usize; // -2 for borders
+    // Split area if search is active
+    let (list_area, search_area) = if app.modal_search_state.active {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(1),     // List
+                Constraint::Length(1),  // Search bar
+            ])
+            .split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
+    
+    // Calculate visible window (account for borders and search bar)
+    let visible_height = list_area.height.saturating_sub(2) as usize; // -2 for borders
     let total_items = modal_state.syscall_list.len();
     
     // Only render visible items
@@ -735,12 +749,23 @@ fn draw_filter_modal(f: &mut Frame, app: &App) {
         .enumerate()
         .skip(start)
         .take(end - start)
-        .map(|(_idx, (name, count))| {
+        .map(|(idx, (name, count))| {
             let is_hidden = app.hidden_syscalls.contains(name);
             let checkbox = if is_hidden { "[ ]" } else { "[✓]" };
+            
+            // Check if this is a search match
+            let is_match = app.modal_search_state.matches.contains(&idx);
+            let is_current_match = app.modal_search_state.active 
+                && !app.modal_search_state.matches.is_empty()
+                && idx == app.modal_search_state.matches[app.modal_search_state.current_match_idx];
+            
             let text = format!("{} {} ({} calls)", checkbox, name, count);
             
-            let style = if is_hidden {
+            let style = if is_current_match {
+                Style::default().bg(Color::Yellow).fg(Color::Black)
+            } else if is_match {
+                Style::default().bg(Color::DarkGray).fg(Color::Yellow)
+            } else if is_hidden {
                 Style::default().fg(Color::DarkGray)
             } else {
                 Style::default()
@@ -750,11 +775,17 @@ fn draw_filter_modal(f: &mut Frame, app: &App) {
         })
         .collect();
     
+    let title = if app.modal_search_state.active {
+        "Filter Syscalls - Search Mode"
+    } else {
+        "Filter Syscalls (Space: Toggle | a: Toggle All | /: Search | q/Esc: Close)"
+    };
+    
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Filter Syscalls (Space: Toggle | a: Toggle All | q/Esc: Close)")
+                .title(title)
         )
         .highlight_style(
             Style::default()
@@ -768,8 +799,40 @@ fn draw_filter_modal(f: &mut Frame, app: &App) {
         state.select(Some(modal_state.selected_index - modal_state.scroll_offset));
     }
     
-    f.render_widget(ratatui::widgets::Clear, area);
-    f.render_stateful_widget(list, area, &mut state);
+    f.render_widget(ratatui::widgets::Clear, list_area);
+    f.render_stateful_widget(list, list_area, &mut state);
+    
+    // Draw search bar if active
+    if let Some(search_area) = search_area {
+        draw_modal_search_bar(f, app, search_area);
+    }
+}
+
+fn draw_modal_search_bar(f: &mut Frame, app: &App, area: Rect) {
+    let query = &app.modal_search_state.query;
+    let match_info = if app.modal_search_state.matches.is_empty() {
+        if query.is_empty() {
+            String::new()
+        } else {
+            " [No matches]".to_string()
+        }
+    } else {
+        format!(
+            " [Match {}/{}]",
+            app.modal_search_state.current_match_idx + 1,
+            app.modal_search_state.matches.len()
+        )
+    };
+
+    let search_text = format!(
+        "Search: {}█{} Enter:accept Esc:cancel n:next N:prev",
+        query, match_info
+    );
+
+    let search_bar = Paragraph::new(search_text)
+        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+
+    f.render_widget(search_bar, area);
 }
 
 fn truncate(s: &str, max_len: usize) -> String {

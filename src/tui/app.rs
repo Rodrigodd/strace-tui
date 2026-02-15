@@ -341,7 +341,7 @@ impl App {
 
     fn rebuild_display_lines(&mut self) {
         // Remember which entry we're looking at before rebuilding
-        let current_entry_idx = if self.selected_line < self.display_lines.len() {
+        let _current_entry_idx = if self.selected_line < self.display_lines.len() {
             Some(self.display_lines[self.selected_line].entry_idx())
         } else {
             None
@@ -1277,11 +1277,26 @@ impl App {
     }
 
     pub fn handle_filter_modal_event(&mut self, event: KeyEvent) {
+        // Priority: Modal search mode
+        if self.modal_search_state.active {
+            self.handle_modal_search_event(event);
+            return;
+        }
+
         // Get visible height for scroll calculations (estimate based on typical modal size)
         // The modal takes 70% of screen height, minus 2 for borders
         let visible_height = (self.last_visible_height * 70 / 100).saturating_sub(2);
 
         match event.code {
+            KeyCode::Char('/') => {
+                self.start_modal_search();
+            }
+            KeyCode::Char('n') if !self.modal_search_state.query.is_empty() => {
+                self.modal_search_next();
+            }
+            KeyCode::Char('N') if !self.modal_search_state.query.is_empty() => {
+                self.modal_search_previous();
+            }
             KeyCode::Esc | KeyCode::Char('H') | KeyCode::Char('q') => {
                 self.close_filter_modal();
             }
@@ -1720,6 +1735,123 @@ impl App {
             _ => {}
         }
     }
+
+    pub fn handle_modal_search_event(&mut self, event: KeyEvent) {
+        match event.code {
+            KeyCode::Char(c) if !event.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.modal_search_state.query.push(c);
+                self.update_modal_search_matches();
+            }
+            KeyCode::Backspace => {
+                self.modal_search_state.query.pop();
+                self.update_modal_search_matches();
+            }
+            KeyCode::Enter => {
+                // Accept search, stay at current position
+                self.modal_search_state.active = false;
+            }
+            KeyCode::Esc => {
+                // Cancel search, return to original position
+                self.filter_modal_state.selected_index = self.modal_search_state.original_position;
+                self.filter_modal_state.scroll_offset = self.modal_search_state.original_scroll;
+                self.modal_search_state.active = false;
+                self.modal_search_state.query.clear();
+                self.modal_search_state.matches.clear();
+            }
+            KeyCode::Char('n') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.modal_search_next();
+            }
+            KeyCode::Char('p') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.modal_search_previous();
+            }
+            _ => {}
+        }
+    }
+
+    fn update_modal_search_matches(&mut self) {
+        self.modal_search_state.matches.clear();
+        
+        if self.modal_search_state.query.is_empty() {
+            return;
+        }
+        
+        let query_lower = self.modal_search_state.query.to_lowercase();
+        
+        // Search in syscall names
+        for (idx, (syscall_name, _count)) in self.filter_modal_state.syscall_list.iter().enumerate() {
+            if syscall_name.to_lowercase().contains(&query_lower) {
+                self.modal_search_state.matches.push(idx);
+            }
+        }
+        
+        // Focus on first match after current position
+        if !self.modal_search_state.matches.is_empty() {
+            let match_idx = self.modal_search_state.matches
+                .iter()
+                .position(|&idx| idx >= self.filter_modal_state.selected_index)
+                .unwrap_or(0);
+            
+            self.modal_search_state.current_match_idx = match_idx;
+            self.filter_modal_state.selected_index = self.modal_search_state.matches[match_idx];
+            self.ensure_modal_visible();
+        }
+    }
+
+    pub fn modal_search_next(&mut self) {
+        if self.modal_search_state.matches.is_empty() {
+            return;
+        }
+        
+        // Find first match AFTER current cursor position
+        let next_match = self.modal_search_state.matches
+            .iter()
+            .position(|&idx| idx > self.filter_modal_state.selected_index);
+        
+        if let Some(match_idx) = next_match {
+            self.modal_search_state.current_match_idx = match_idx;
+        } else {
+            // Wrap to first match
+            self.modal_search_state.current_match_idx = 0;
+        }
+        
+        let match_idx = self.modal_search_state.matches[self.modal_search_state.current_match_idx];
+        self.filter_modal_state.selected_index = match_idx;
+        self.ensure_modal_visible();
+    }
+
+    pub fn modal_search_previous(&mut self) {
+        if self.modal_search_state.matches.is_empty() {
+            return;
+        }
+        
+        // Find last match BEFORE current cursor position
+        let prev_match = self.modal_search_state.matches
+            .iter()
+            .rposition(|&idx| idx < self.filter_modal_state.selected_index);
+        
+        if let Some(match_idx) = prev_match {
+            self.modal_search_state.current_match_idx = match_idx;
+        } else {
+            // Wrap to last match
+            self.modal_search_state.current_match_idx = self.modal_search_state.matches.len() - 1;
+        }
+        
+        let match_idx = self.modal_search_state.matches[self.modal_search_state.current_match_idx];
+        self.filter_modal_state.selected_index = match_idx;
+        self.ensure_modal_visible();
+    }
+
+    fn ensure_modal_visible(&mut self) {
+        let visible_height = (self.last_visible_height * 70 / 100).saturating_sub(2);
+        
+        if self.filter_modal_state.selected_index < self.filter_modal_state.scroll_offset {
+            self.filter_modal_state.scroll_offset = self.filter_modal_state.selected_index;
+        } else if self.filter_modal_state.selected_index >= self.filter_modal_state.scroll_offset + visible_height {
+            self.filter_modal_state.scroll_offset = self.filter_modal_state.selected_index
+                .saturating_sub(visible_height) + 1;
+        }
+    }
+
 
     fn resolve_current_backtrace(&mut self) {
         if self.selected_line >= self.display_lines.len() {
