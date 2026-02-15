@@ -182,11 +182,14 @@ fn run_strace(command: Vec<String>, trace_file: Option<String>) -> String {
         path
     } else {
         // Create a temp file with a meaningful name
-        let temp = NamedTempFile::with_prefix("strace-tui-")
-            .expect("Failed to create temp file");
+        let temp = NamedTempFile::with_prefix("strace-tui-").expect("Failed to create temp file");
         // Keep the temp file around by persisting it
-        temp.keep().expect("Failed to persist temp file").1
-            .to_str().unwrap().to_string()
+        temp.keep()
+            .expect("Failed to persist temp file")
+            .1
+            .to_str()
+            .unwrap()
+            .to_string()
     };
 
     eprintln!("Running strace on: {}", command.join(" "));

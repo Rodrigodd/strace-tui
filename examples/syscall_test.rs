@@ -1,4 +1,4 @@
-use std::fs::{File};
+use std::fs::File;
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -28,19 +28,21 @@ fn test_file_io() {
 
     // write syscall
     let mut file1 = NamedTempFile::new().expect("Failed to create file");
-    file1.write_all(b"Hello from strace test!\n")
+    file1
+        .write_all(b"Hello from strace test!\n")
         .expect("Failed to write");
-    file1.write_all(b"Second line of data.\n")
+    file1
+        .write_all(b"Second line of data.\n")
         .expect("Failed to write second line");
     file1.flush().expect("Failed to flush");
-    
+
     // open, read, close syscalls - reopen the same temp file
     let mut file = File::open(file1.path()).expect("Failed to open file");
     let mut contents = String::new();
     file.read_to_string(&mut contents).expect("Failed to read");
     println!("Read {} bytes", contents.len());
     drop(file);
-    
+
     // Drop file1 after we're done reading
     drop(file1);
 

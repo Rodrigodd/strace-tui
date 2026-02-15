@@ -19,8 +19,9 @@ pub fn parse_strace_line(line: &str) -> ParseResult<SyscallEntry> {
         return parse_signal_line(line);
     }
 
-    // Parse regular syscall line
+    // Parse regular syscall line - try with PID first, then without
     let (rest, (pid, timestamp)) = parse_pid_and_timestamp(line)
+        .or_else(|_| parse_timestamp_only(line))
         .map_err(|e| ParseError::InvalidFormat(format!("Failed to parse PID/timestamp: {}", e)))?;
 
     // Check for <... resumed> pattern
@@ -72,6 +73,13 @@ fn parse_pid_and_timestamp(input: &str) -> IResult<&str, (u32, String)> {
     let (rest, timestamp) = terminated(parse_timestamp, space1)(rest)?;
 
     Ok((rest, (pid.parse().unwrap_or(0), timestamp.to_string())))
+}
+
+/// Parse timestamp only (no PID) - for strace without -f
+fn parse_timestamp_only(input: &str) -> IResult<&str, (u32, String)> {
+    let (rest, timestamp) = terminated(parse_timestamp, space1)(input)?;
+    // Use PID 0 when no PID is present
+    Ok((rest, (0, timestamp.to_string())))
 }
 
 /// Parse timestamp in HH:MM:SS format
@@ -254,6 +262,7 @@ fn parse_resumed_line(pid: u32, timestamp: String, input: &str) -> ParseResult<S
 /// Parse signal line (--- SIGNAL {...} ---)
 fn parse_signal_line(line: &str) -> ParseResult<SyscallEntry> {
     let (pid, timestamp) = parse_pid_and_timestamp(line)
+        .or_else(|_| parse_timestamp_only(line))
         .map_err(|e| {
             ParseError::InvalidFormat(format!("Signal line missing PID/timestamp: {}", e))
         })?
@@ -283,6 +292,7 @@ fn parse_signal_line(line: &str) -> ParseResult<SyscallEntry> {
 /// Parse exit line (+++ exited with N +++)
 fn parse_exit_line(line: &str) -> ParseResult<SyscallEntry> {
     let (pid, timestamp) = parse_pid_and_timestamp(line)
+        .or_else(|_| parse_timestamp_only(line))
         .map_err(|e| ParseError::InvalidFormat(format!("Exit line missing PID/timestamp: {}", e)))?
         .1;
 
@@ -385,5 +395,55 @@ mod tests {
         let exit = entry.exit_info.unwrap();
         assert_eq!(exit.code, 0);
         assert!(!exit.killed);
+    }
+
+    #[test]
+    fn test_parse_no_pid_simple() {
+        let line = "23:14:48 brk(NULL) = 0x55772af19000";
+        let entry = parse_strace_line(line).unwrap();
+
+        assert_eq!(entry.pid, 0); // No PID = 0
+        assert_eq!(entry.timestamp, "23:14:48");
+        assert_eq!(entry.syscall_name, "brk");
+        assert_eq!(entry.arguments, "NULL");
+        assert_eq!(entry.return_value, Some("0x55772af19000".to_string()));
+    }
+
+    #[test]
+    fn test_parse_no_pid_with_errno() {
+        let line =
+            "23:14:48 access(\"/etc/ld.so.preload\", R_OK) = -1 ENOENT (No such file or directory)";
+        let entry = parse_strace_line(line).unwrap();
+
+        assert_eq!(entry.pid, 0);
+        assert_eq!(entry.syscall_name, "access");
+        assert_eq!(entry.return_value, Some("-1".to_string()));
+        assert!(entry.errno.is_some());
+        let errno = entry.errno.unwrap();
+        assert_eq!(errno.code, "ENOENT");
+    }
+
+    #[test]
+    fn test_parse_no_pid_signal() {
+        let line = "23:14:48 --- SIGINT {si_signo=SIGINT, si_code=SI_USER} ---";
+        let entry = parse_strace_line(line).unwrap();
+
+        assert_eq!(entry.pid, 0);
+        assert_eq!(entry.syscall_name, "signal");
+        assert!(entry.signal.is_some());
+        let signal = entry.signal.unwrap();
+        assert_eq!(signal.signal_name, "SIGINT");
+    }
+
+    #[test]
+    fn test_parse_no_pid_exit() {
+        let line = "23:14:48 +++ exited with 0 +++";
+        let entry = parse_strace_line(line).unwrap();
+
+        assert_eq!(entry.pid, 0);
+        assert_eq!(entry.syscall_name, "exit");
+        assert!(entry.exit_info.is_some());
+        let exit = entry.exit_info.unwrap();
+        assert_eq!(exit.code, 0);
     }
 }

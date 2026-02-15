@@ -4,10 +4,14 @@ A terminal user interface (TUI) for visualizing and exploring strace output.
 
 ## Overview
 
-strace-tui is a Rust-based tool that parses strace output and provides an interactive TUI for exploring system call traces. It supports parsing the output format from `strace -o file.txt -t -k -f -s 1024 <cmd>`, including:
+strace-tui is a Rust-based tool that parses strace output and provides an interactive TUI for exploring system call traces. It supports parsing the output from both single-process and multi-process strace runs:
 
+- **Single-process traces**: `strace -o file.txt -t -k -s 1024 <cmd>`
+- **Multi-process traces**: `strace -o file.txt -t -k -f -s 1024 <cmd>`
+
+Supported features:
 - All syscall patterns (normal, unfinished, resumed)
-- Multi-process traces (`-f` flag)
+- Single and multi-process traces (with or without `-f` flag)
 - Timestamps (`-t` flag)
 - Kernel backtraces (`-k` flag)
 - Signals and process exits
@@ -72,6 +76,12 @@ strace-tui trace --keep-trace --trace-file my_trace.txt ./my_program
 
 To create a trace file for use with strace-tui:
 
+**Single-process trace** (simpler, smaller output):
+```bash
+strace -o trace.txt -t -k -s 1024 <your_command>
+```
+
+**Multi-process trace** (follows forks and clones):
 ```bash
 strace -o trace.txt -t -k -f -s 1024 <your_command>
 ```
@@ -79,8 +89,10 @@ strace -o trace.txt -t -k -f -s 1024 <your_command>
 Flags:
 - `-t`: Include timestamps
 - `-k`: Include kernel backtraces
-- `-f`: Follow forks (multi-process)
+- `-f`: Follow forks (multi-process) - optional
 - `-s 1024`: Capture up to 1024 bytes of string arguments
+
+**Note**: strace-tui automatically detects whether your trace file has PIDs (from `-f`) or not, and handles both formats seamlessly.
 
 ## Examples
 

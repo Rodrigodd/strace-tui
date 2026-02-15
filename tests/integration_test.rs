@@ -89,6 +89,48 @@ fn test_addr2line_resolver() {
 }
 
 #[test]
+fn test_parse_no_pid_format() {
+    // Test parsing strace output without PIDs (strace without -f)
+    let sample = r#"23:14:48 execve("/usr/bin/echo", ["echo", "test"], 0x7ffea15c5fd8 /* 42 vars */) = 0
+23:14:48 brk(NULL) = 0x55772af19000
+23:14:48 access("/etc/ld.so.preload", R_OK) = -1 ENOENT (No such file or directory)
+23:14:48 openat(AT_FDCWD, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 3
+23:14:48 close(3) = 0
+23:14:48 write(1, "test\n", 5) = 5
+23:14:48 +++ exited with 0 +++
+"#;
+
+    let mut temp_file = NamedTempFile::new().unwrap();
+    temp_file.write_all(sample.as_bytes()).unwrap();
+    let temp_path = temp_file.path().to_str().unwrap();
+
+    let mut parser = StraceParser::new();
+    let entries = parser.parse_file(temp_path).unwrap();
+
+    assert!(entries.len() >= 6, "Should parse at least 6 entries");
+
+    // All entries should have PID 0 (no PID in format)
+    for entry in &entries {
+        assert_eq!(entry.pid, 0, "Entries without PID should have PID 0");
+    }
+
+    // Check first syscall
+    assert_eq!(entries[0].syscall_name, "execve");
+    assert_eq!(entries[0].timestamp, "23:14:48");
+    assert_eq!(entries[0].return_value, Some("0".to_string()));
+
+    // Check syscall with error
+    let access_entry = entries.iter().find(|e| e.syscall_name == "access");
+    assert!(access_entry.is_some());
+    assert!(access_entry.unwrap().errno.is_some());
+
+    // Check exit entry
+    let exit_entry = entries.iter().find(|e| e.exit_info.is_some());
+    assert!(exit_entry.is_some());
+    assert_eq!(exit_entry.unwrap().exit_info.as_ref().unwrap().code, 0);
+}
+
+#[test]
 fn test_cli_parse_subcommand() {
     use std::process::Command;
 
@@ -142,14 +184,7 @@ fn test_cli_trace_subcommand() {
 
     // Run the trace subcommand with output to file to avoid mixing traced program output with JSON
     let output = Command::new("./target/debug/strace-tui")
-        .args(&[
-            "trace",
-            "--json",
-            "--output",
-            output_path,
-            "echo",
-            "test",
-        ])
+        .args(&["trace", "--json", "--output", output_path, "echo", "test"])
         .output()
         .expect("Failed to run trace command");
 
@@ -157,8 +192,7 @@ fn test_cli_trace_subcommand() {
     assert!(output.status.success(), "trace command should succeed");
 
     // Read the output file
-    let json_str =
-        std::fs::read_to_string(output_path).expect("Failed to read output file");
+    let json_str = std::fs::read_to_string(output_path).expect("Failed to read output file");
 
     let parsed: serde_json::Value =
         serde_json::from_str(&json_str).expect("Output should be valid JSON");
