@@ -8,16 +8,30 @@ use ratatui::{
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // Header line
-            Constraint::Length(1), // Divider
-            Constraint::Min(0),    // Main content
-            Constraint::Length(1), // Divider
-            Constraint::Length(1), // Footer line
-        ])
-        .split(f.area());
+    // Adjust layout based on search state
+    let chunks = if app.search_state.active {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // Header line
+                Constraint::Length(1), // Divider
+                Constraint::Min(0),    // Main content
+                Constraint::Length(1), // Search bar
+                Constraint::Length(1), // Footer line
+            ])
+            .split(f.area())
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // Header line
+                Constraint::Length(1), // Divider
+                Constraint::Min(0),    // Main content
+                Constraint::Length(1), // Divider
+                Constraint::Length(1), // Footer line
+            ])
+            .split(f.area())
+    };
 
     // Draw header
     draw_header(f, app, chunks[0]);
@@ -28,11 +42,19 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // Draw main list
     draw_list(f, app, chunks[2]);
 
-    // Draw divider
-    draw_divider(f, chunks[3]);
-
-    // Draw footer
-    draw_footer(f, app, chunks[4]);
+    if app.search_state.active {
+        // Draw search bar
+        draw_search_bar(f, app, chunks[3]);
+        
+        // Draw footer
+        draw_footer(f, app, chunks[4]);
+    } else {
+        // Draw divider
+        draw_divider(f, chunks[3]);
+        
+        // Draw footer
+        draw_footer(f, app, chunks[4]);
+    }
 
     // Draw help modal on top if active
     if app.show_help {
@@ -104,7 +126,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         let display_line = &app.display_lines[line_idx];
 
         let line_content = match display_line {
-            DisplayLine::SyscallHeader { entry_idx, is_hidden } => {
+            DisplayLine::SyscallHeader { entry_idx, is_hidden, .. } => {
                 let entry = &app.entries[*entry_idx];
                 let is_expanded = app.expanded_items.contains(entry_idx);
                 let arrow = if is_expanded { "▼" } else { "▶" };
@@ -327,7 +349,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
             DisplayLine::ArgumentsHeader {
                 entry_idx,
-                tree_prefix,
+                tree_prefix, ..
             } => {
                 let entry = &app.entries[*entry_idx];
                 let args_expanded = app.expanded_arguments.contains(entry_idx);
@@ -344,7 +366,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             DisplayLine::ArgumentLine {
                 entry_idx,
                 arg_idx,
-                tree_prefix,
+                tree_prefix, ..
             } => {
                 let entry = &app.entries[*entry_idx];
                 let args = split_arguments(&entry.arguments);
@@ -363,7 +385,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
             DisplayLine::ReturnValue {
                 entry_idx,
-                tree_prefix,
+                tree_prefix, ..
             } => {
                 let entry = &app.entries[*entry_idx];
                 let prefix_str = App::tree_prefix_to_string(tree_prefix);
@@ -391,7 +413,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
             DisplayLine::Error {
                 entry_idx,
-                tree_prefix,
+                tree_prefix, ..
             } => {
                 let entry = &app.entries[*entry_idx];
                 if let Some(ref errno) = entry.errno {
@@ -408,7 +430,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
             DisplayLine::Duration {
                 entry_idx,
-                tree_prefix,
+                tree_prefix, ..
             } => {
                 let entry = &app.entries[*entry_idx];
                 if let Some(dur) = entry.duration {
@@ -425,7 +447,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
             DisplayLine::Signal {
                 entry_idx,
-                tree_prefix,
+                tree_prefix, ..
             } => {
                 let entry = &app.entries[*entry_idx];
                 if let Some(ref signal) = entry.signal {
@@ -447,7 +469,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
             DisplayLine::Exit {
                 entry_idx,
-                tree_prefix,
+                tree_prefix, ..
             } => {
                 let entry = &app.entries[*entry_idx];
                 if let Some(ref exit) = entry.exit_info {
@@ -468,7 +490,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
             DisplayLine::BacktraceHeader {
                 entry_idx,
-                tree_prefix,
+                tree_prefix, ..
             } => {
                 let entry = &app.entries[*entry_idx];
                 let bt_expanded = app.expanded_backtraces.contains(entry_idx);
@@ -488,7 +510,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             DisplayLine::BacktraceFrame {
                 entry_idx,
                 frame_idx,
-                tree_prefix,
+                tree_prefix, ..
             } => {
                 let entry = &app.entries[*entry_idx];
                 let frame = &entry.backtrace[*frame_idx];
@@ -520,7 +542,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             DisplayLine::BacktraceResolved {
                 entry_idx,
                 frame_idx,
-                tree_prefix,
+                tree_prefix, ..
             } => {
                 let entry = &app.entries[*entry_idx];
                 let frame = &entry.backtrace[*frame_idx];
@@ -578,6 +600,33 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(footer, area);
 }
 
+fn draw_search_bar(f: &mut Frame, app: &App, area: Rect) {
+    let match_info = if app.search_state.matches.is_empty() {
+        if app.search_state.query.is_empty() {
+            String::new()
+        } else {
+            "No matches".to_string()
+        }
+    } else {
+        format!("Match {}/{}", 
+            app.search_state.current_match_idx + 1,
+            app.search_state.matches.len())
+    };
+    
+    let text = if match_info.is_empty() {
+        format!("Search: {}█  Enter:accept Esc:cancel n:next N:prev", 
+            app.search_state.query)
+    } else {
+        format!("Search: {}█  [{}]  Enter:accept Esc:cancel n:next N:prev", 
+            app.search_state.query, match_info)
+    };
+    
+    let paragraph = Paragraph::new(text)
+        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    
+    f.render_widget(paragraph, area);
+}
+
 fn draw_help(f: &mut Frame) {
     let help_text = vec![
         Line::from(Span::styled(
@@ -633,6 +682,16 @@ fn draw_help(f: &mut Frame) {
         Line::from("  Home/g      Jump to first"),
         Line::from("  End/G       Jump to last"),
         Line::from("  Esc/H/q     Close modal"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Search:",
+            Style::default().add_modifier(Modifier::UNDERLINED),
+        )),
+        Line::from("  /           Start search"),
+        Line::from("  n           Next match"),
+        Line::from("  N           Previous match"),
+        Line::from("  Enter       Accept search"),
+        Line::from("  Esc         Cancel search"),
         Line::from(""),
         Line::from(Span::styled(
             "Other:",

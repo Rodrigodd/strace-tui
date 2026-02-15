@@ -22,49 +22,60 @@ pub enum DisplayLine {
     SyscallHeader {
         entry_idx: usize,
         is_hidden: bool,
+        is_search_match: bool,
     },
     ArgumentsHeader {
         entry_idx: usize,
         tree_prefix: TreePrefix,
+        is_search_match: bool,
     },
     ArgumentLine {
         entry_idx: usize,
         arg_idx: usize,
         tree_prefix: TreePrefix,
+        is_search_match: bool,
     },
     ReturnValue {
         entry_idx: usize,
         tree_prefix: TreePrefix,
+        is_search_match: bool,
     },
     Error {
         entry_idx: usize,
         tree_prefix: TreePrefix,
+        is_search_match: bool,
     },
     Duration {
         entry_idx: usize,
         tree_prefix: TreePrefix,
+        is_search_match: bool,
     },
     Signal {
         entry_idx: usize,
         tree_prefix: TreePrefix,
+        is_search_match: bool,
     },
     Exit {
         entry_idx: usize,
         tree_prefix: TreePrefix,
+        is_search_match: bool,
     },
     BacktraceHeader {
         entry_idx: usize,
         tree_prefix: TreePrefix,
+        is_search_match: bool,
     },
     BacktraceFrame {
         entry_idx: usize,
         frame_idx: usize,
         tree_prefix: TreePrefix,
+        is_search_match: bool,
     },
     BacktraceResolved {
         entry_idx: usize,
         frame_idx: usize,
         tree_prefix: TreePrefix,
+        is_search_match: bool,
     },
 }
 
@@ -92,6 +103,28 @@ pub struct FilterModalState {
     pub scroll_offset: usize,
 }
 
+pub struct SearchState {
+    pub active: bool,
+    pub query: String,
+    pub matches: Vec<usize>,      // Indices of matching display lines
+    pub current_match_idx: usize, // Index into matches vec
+    pub original_position: usize, // Position before search (for Esc)
+    pub original_scroll: usize,   // Scroll offset before search
+}
+
+impl SearchState {
+    fn new() -> Self {
+        Self {
+            active: false,
+            query: String::new(),
+            matches: Vec::new(),
+            current_match_idx: 0,
+            original_position: 0,
+            original_scroll: 0,
+        }
+    }
+}
+
 pub struct App {
     // Data
     pub entries: Vec<SyscallEntry>,
@@ -117,6 +150,10 @@ pub struct App {
     pub show_filter_modal: bool,
     pub filter_modal_state: FilterModalState,
 
+    // Search state
+    pub search_state: SearchState,
+    pub modal_search_state: SearchState,
+
     // Flags
     pub should_quit: bool,
     pub show_help: bool,
@@ -135,7 +172,9 @@ impl App {
             std::collections::HashMap::new();
         for entry in &entries {
             if !entry.syscall_name.is_empty() {
-                *syscall_counts.entry(entry.syscall_name.clone()).or_insert(0) += 1;
+                *syscall_counts
+                    .entry(entry.syscall_name.clone())
+                    .or_insert(0) += 1;
             }
         }
         let mut syscall_list: Vec<(String, usize)> = syscall_counts.into_iter().collect();
@@ -164,6 +203,8 @@ impl App {
                 selected_index: 0,
                 scroll_offset: 0,
             },
+            search_state: SearchState::new(),
+            modal_search_state: SearchState::new(),
             should_quit: false,
             show_help: false,
         };
@@ -299,12 +340,19 @@ impl App {
     }
 
     fn rebuild_display_lines(&mut self) {
+        // Remember which entry we're looking at before rebuilding
+        let current_entry_idx = if self.selected_line < self.display_lines.len() {
+            Some(self.display_lines[self.selected_line].entry_idx())
+        } else {
+            None
+        };
+
         self.display_lines.clear();
 
         for (idx, entry) in self.entries.iter().enumerate() {
             // Check if this syscall should be hidden
             let is_hidden = self.hidden_syscalls.contains(&entry.syscall_name);
-            
+
             // Skip hidden items unless show_hidden is true
             if is_hidden && !self.show_hidden {
                 continue;
@@ -314,6 +362,7 @@ impl App {
             self.display_lines.push(DisplayLine::SyscallHeader {
                 entry_idx: idx,
                 is_hidden,
+                is_search_match: false,
             });
 
             // Add expanded details if item is expanded
@@ -364,6 +413,7 @@ impl App {
                     self.display_lines.push(DisplayLine::ArgumentsHeader {
                         entry_idx: idx,
                         tree_prefix: prefix,
+                        is_search_match: false,
                     });
 
                     // Add arguments if expanded
@@ -379,6 +429,7 @@ impl App {
                                 entry_idx: idx,
                                 arg_idx,
                                 tree_prefix: arg_prefix,
+                                is_search_match: false,
                             });
                         }
                     }
@@ -392,6 +443,7 @@ impl App {
                     self.display_lines.push(DisplayLine::ReturnValue {
                         entry_idx: idx,
                         tree_prefix: prefix,
+                        is_search_match: false,
                     });
                     item_idx += 1;
                 }
@@ -403,6 +455,7 @@ impl App {
                     self.display_lines.push(DisplayLine::Error {
                         entry_idx: idx,
                         tree_prefix: prefix,
+                        is_search_match: false,
                     });
                     item_idx += 1;
                 }
@@ -414,6 +467,7 @@ impl App {
                     self.display_lines.push(DisplayLine::Duration {
                         entry_idx: idx,
                         tree_prefix: prefix,
+                        is_search_match: false,
                     });
                     item_idx += 1;
                 }
@@ -425,6 +479,7 @@ impl App {
                     self.display_lines.push(DisplayLine::Signal {
                         entry_idx: idx,
                         tree_prefix: prefix,
+                        is_search_match: false,
                     });
                     item_idx += 1;
                 }
@@ -436,6 +491,7 @@ impl App {
                     self.display_lines.push(DisplayLine::Exit {
                         entry_idx: idx,
                         tree_prefix: prefix,
+                        is_search_match: false,
                     });
                     item_idx += 1;
                 }
@@ -448,6 +504,7 @@ impl App {
                     self.display_lines.push(DisplayLine::BacktraceHeader {
                         entry_idx: idx,
                         tree_prefix: prefix,
+                        is_search_match: false,
                     });
 
                     // Add backtrace frames if expanded
@@ -463,12 +520,14 @@ impl App {
                                     entry_idx: idx,
                                     frame_idx,
                                     tree_prefix: frame_prefix,
+                                    is_search_match: false,
                                 });
                             } else {
                                 self.display_lines.push(DisplayLine::BacktraceResolved {
                                     entry_idx: idx,
                                     frame_idx,
                                     tree_prefix: frame_prefix,
+                                    is_search_match: false,
                                 });
                             }
                         }
@@ -481,21 +540,29 @@ impl App {
         if self.selected_line >= self.display_lines.len() && !self.display_lines.is_empty() {
             self.selected_line = self.display_lines.len() - 1;
         }
+
+        // Update search matches if search is active (without moving cursor)
+        if !self.search_state.matches.is_empty() {
+            self.update_search_matches_internal(false);
+        }
     }
 
     pub fn handle_event(&mut self, event: KeyEvent) {
-        // Handle filter modal if open
+        // Priority 1: Search mode
+        if self.search_state.active {
+            self.handle_search_event(event);
+            return;
+        }
+
+        // Priority 2: Filter modal
         if self.show_filter_modal {
             self.handle_filter_modal_event(event);
             return;
         }
 
-        // Handle help screen toggle
+        // Priority 3: Help screen
         if self.show_help {
-            if matches!(
-                event.code,
-                KeyCode::Char('?') | KeyCode::Esc
-            ) {
+            if matches!(event.code, KeyCode::Char('?') | KeyCode::Esc) {
                 self.show_help = false;
             }
             return;
@@ -578,6 +645,17 @@ impl App {
             }
             KeyCode::Char('R') => {
                 self.resolve_all_backtraces();
+            }
+
+            // Search controls
+            KeyCode::Char('/') => {
+                self.start_search();
+            }
+            KeyCode::Char('n') if !self.search_state.query.is_empty() => {
+                self.search_next();
+            }
+            KeyCode::Char('N') if !self.search_state.query.is_empty() => {
+                self.search_previous();
             }
 
             _ => {}
@@ -1162,7 +1240,7 @@ impl App {
                 self.hidden_syscalls.insert(syscall_name);
             }
             self.rebuild_display_lines();
-            
+
             // Adjust selection if current line is now hidden
             if self.selected_line >= self.display_lines.len() && !self.display_lines.is_empty() {
                 self.selected_line = self.display_lines.len() - 1;
@@ -1202,7 +1280,7 @@ impl App {
         // Get visible height for scroll calculations (estimate based on typical modal size)
         // The modal takes 70% of screen height, minus 2 for borders
         let visible_height = (self.last_visible_height * 70 / 100).saturating_sub(2);
-        
+
         match event.code {
             KeyCode::Esc | KeyCode::Char('H') | KeyCode::Char('q') => {
                 self.close_filter_modal();
@@ -1210,10 +1288,13 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.filter_modal_state.selected_index > 0 {
                     self.filter_modal_state.selected_index -= 1;
-                    
+
                     // Adjust scroll if needed
-                    if self.filter_modal_state.selected_index < self.filter_modal_state.scroll_offset {
-                        self.filter_modal_state.scroll_offset = self.filter_modal_state.selected_index;
+                    if self.filter_modal_state.selected_index
+                        < self.filter_modal_state.scroll_offset
+                    {
+                        self.filter_modal_state.scroll_offset =
+                            self.filter_modal_state.selected_index;
                     }
                 }
             }
@@ -1222,11 +1303,13 @@ impl App {
                     < self.filter_modal_state.syscall_list.len()
                 {
                     self.filter_modal_state.selected_index += 1;
-                    
+
                     // Adjust scroll if needed
                     let max_visible = self.filter_modal_state.scroll_offset + visible_height;
                     if self.filter_modal_state.selected_index >= max_visible {
-                        self.filter_modal_state.scroll_offset = self.filter_modal_state.selected_index
+                        self.filter_modal_state.scroll_offset = self
+                            .filter_modal_state
+                            .selected_index
                             .saturating_sub(visible_height)
                             + 1;
                     }
@@ -1234,38 +1317,52 @@ impl App {
             }
             KeyCode::PageUp => {
                 let scroll_amount = visible_height;
-                self.filter_modal_state.selected_index = 
-                    self.filter_modal_state.selected_index.saturating_sub(scroll_amount);
-                self.filter_modal_state.scroll_offset = 
-                    self.filter_modal_state.scroll_offset.saturating_sub(scroll_amount);
+                self.filter_modal_state.selected_index = self
+                    .filter_modal_state
+                    .selected_index
+                    .saturating_sub(scroll_amount);
+                self.filter_modal_state.scroll_offset = self
+                    .filter_modal_state
+                    .scroll_offset
+                    .saturating_sub(scroll_amount);
             }
             KeyCode::PageDown => {
                 let scroll_amount = visible_height;
                 let max_index = self.filter_modal_state.syscall_list.len().saturating_sub(1);
-                self.filter_modal_state.selected_index = 
+                self.filter_modal_state.selected_index =
                     (self.filter_modal_state.selected_index + scroll_amount).min(max_index);
-                
-                let max_scroll = self.filter_modal_state.syscall_list.len()
+
+                let max_scroll = self
+                    .filter_modal_state
+                    .syscall_list
+                    .len()
                     .saturating_sub(visible_height);
-                self.filter_modal_state.scroll_offset = 
+                self.filter_modal_state.scroll_offset =
                     (self.filter_modal_state.scroll_offset + scroll_amount).min(max_scroll);
             }
             KeyCode::Char('u') if event.modifiers.contains(KeyModifiers::CONTROL) => {
                 let scroll_amount = visible_height / 2;
-                self.filter_modal_state.selected_index = 
-                    self.filter_modal_state.selected_index.saturating_sub(scroll_amount);
-                self.filter_modal_state.scroll_offset = 
-                    self.filter_modal_state.scroll_offset.saturating_sub(scroll_amount);
+                self.filter_modal_state.selected_index = self
+                    .filter_modal_state
+                    .selected_index
+                    .saturating_sub(scroll_amount);
+                self.filter_modal_state.scroll_offset = self
+                    .filter_modal_state
+                    .scroll_offset
+                    .saturating_sub(scroll_amount);
             }
             KeyCode::Char('d') if event.modifiers.contains(KeyModifiers::CONTROL) => {
                 let scroll_amount = visible_height / 2;
                 let max_index = self.filter_modal_state.syscall_list.len().saturating_sub(1);
-                self.filter_modal_state.selected_index = 
+                self.filter_modal_state.selected_index =
                     (self.filter_modal_state.selected_index + scroll_amount).min(max_index);
-                
-                let max_scroll = self.filter_modal_state.syscall_list.len()
+
+                let max_scroll = self
+                    .filter_modal_state
+                    .syscall_list
+                    .len()
                     .saturating_sub(visible_height);
-                self.filter_modal_state.scroll_offset = 
+                self.filter_modal_state.scroll_offset =
                     (self.filter_modal_state.scroll_offset + scroll_amount).min(max_scroll);
             }
             KeyCode::Home | KeyCode::Char('g') => {
@@ -1275,8 +1372,11 @@ impl App {
             KeyCode::End | KeyCode::Char('G') => {
                 let max_index = self.filter_modal_state.syscall_list.len().saturating_sub(1);
                 self.filter_modal_state.selected_index = max_index;
-                
-                let max_scroll = self.filter_modal_state.syscall_list.len()
+
+                let max_scroll = self
+                    .filter_modal_state
+                    .syscall_list
+                    .len()
                     .saturating_sub(visible_height);
                 self.filter_modal_state.scroll_offset = max_scroll;
             }
@@ -1298,6 +1398,324 @@ impl App {
             }
             KeyCode::Char('a') => {
                 self.toggle_all_syscalls();
+            }
+            _ => {}
+        }
+    }
+
+    // Search methods
+    pub fn start_search(&mut self) {
+        self.search_state.active = true;
+        self.search_state.original_position = self.selected_line;
+        self.search_state.original_scroll = self.scroll_offset;
+        self.search_state.query.clear();
+        self.search_state.matches.clear();
+        self.search_state.current_match_idx = 0;
+    }
+
+    pub fn start_modal_search(&mut self) {
+        self.modal_search_state.active = true;
+        self.modal_search_state.original_position = self.filter_modal_state.selected_index;
+        self.modal_search_state.original_scroll = self.filter_modal_state.scroll_offset;
+        self.modal_search_state.query.clear();
+        self.modal_search_state.matches.clear();
+        self.modal_search_state.current_match_idx = 0;
+    }
+
+    fn get_line_text(&self, line: &DisplayLine) -> String {
+        match line {
+            DisplayLine::SyscallHeader { entry_idx, .. } => {
+                let entry = &self.entries[*entry_idx];
+                format!(
+                    "{} {} {}",
+                    entry.syscall_name,
+                    entry.arguments,
+                    entry.return_value.as_deref().unwrap_or("")
+                )
+            }
+            DisplayLine::ArgumentLine {
+                entry_idx, arg_idx, ..
+            } => {
+                let entry = &self.entries[*entry_idx];
+                let args = split_arguments(&entry.arguments);
+                args.get(*arg_idx).cloned().unwrap_or_default()
+            }
+            DisplayLine::ArgumentsHeader { .. } => "Arguments".to_string(),
+            DisplayLine::ReturnValue { entry_idx, .. } => {
+                let entry = &self.entries[*entry_idx];
+                format!("Return: {}", entry.return_value.as_deref().unwrap_or("?"))
+            }
+            DisplayLine::Error { entry_idx, .. } => {
+                let entry = &self.entries[*entry_idx];
+                if let Some(errno) = &entry.errno {
+                    format!("Error: {} {}", errno.code, errno.message)
+                } else {
+                    String::new()
+                }
+            }
+            DisplayLine::Signal { entry_idx, .. } => {
+                let entry = &self.entries[*entry_idx];
+                if let Some(signal) = &entry.signal {
+                    format!("Signal: {}", signal.signal_name)
+                } else {
+                    String::new()
+                }
+            }
+            DisplayLine::Exit { entry_idx, .. } => {
+                let entry = &self.entries[*entry_idx];
+                if let Some(exit) = &entry.exit_info {
+                    format!("Exit: code={} killed={}", exit.code, exit.killed)
+                } else {
+                    String::new()
+                }
+            }
+            DisplayLine::BacktraceHeader { .. } => "Backtrace".to_string(),
+            DisplayLine::BacktraceFrame {
+                entry_idx,
+                frame_idx,
+                ..
+            } => {
+                let entry = &self.entries[*entry_idx];
+                if let Some(frame) = entry.backtrace.get(*frame_idx) {
+                    format!("{} {}", frame.binary, frame.address)
+                } else {
+                    String::new()
+                }
+            }
+            DisplayLine::BacktraceResolved {
+                entry_idx,
+                frame_idx,
+                ..
+            } => {
+                let entry = &self.entries[*entry_idx];
+                if let Some(frame) = entry.backtrace.get(*frame_idx) {
+                    if let Some(resolved) = &frame.resolved {
+                        format!("{} {}:{}", frame.binary, resolved.file, resolved.line)
+                    } else {
+                        format!("{} {}", frame.binary, frame.address)
+                    }
+                } else {
+                    String::new()
+                }
+            }
+            DisplayLine::Duration { .. } => String::new(),
+        }
+    }
+
+    pub fn update_search_matches(&mut self) {
+        self.update_search_matches_internal(true);
+    }
+
+    fn update_search_matches_internal(&mut self, move_cursor: bool) {
+        log::debug!(
+            "Updating search matches for query '{}'",
+            self.search_state.query
+        );
+        self.search_state.matches.clear();
+
+        if self.search_state.query.is_empty() {
+            // Clear search match flags
+            for line in &mut self.display_lines {
+                match line {
+                    DisplayLine::SyscallHeader {
+                        is_search_match, ..
+                    } => *is_search_match = false,
+                    DisplayLine::ArgumentsHeader {
+                        is_search_match, ..
+                    } => *is_search_match = false,
+                    DisplayLine::ArgumentLine {
+                        is_search_match, ..
+                    } => *is_search_match = false,
+                    DisplayLine::ReturnValue {
+                        is_search_match, ..
+                    } => *is_search_match = false,
+                    DisplayLine::Error {
+                        is_search_match, ..
+                    } => *is_search_match = false,
+                    DisplayLine::Duration {
+                        is_search_match, ..
+                    } => *is_search_match = false,
+                    DisplayLine::Signal {
+                        is_search_match, ..
+                    } => *is_search_match = false,
+                    DisplayLine::Exit {
+                        is_search_match, ..
+                    } => *is_search_match = false,
+                    DisplayLine::BacktraceHeader {
+                        is_search_match, ..
+                    } => *is_search_match = false,
+                    DisplayLine::BacktraceFrame {
+                        is_search_match, ..
+                    } => *is_search_match = false,
+                    DisplayLine::BacktraceResolved {
+                        is_search_match, ..
+                    } => *is_search_match = false,
+                }
+            }
+            return;
+        }
+
+        let query_lower = self.search_state.query.to_lowercase();
+
+        // First pass: collect match information
+        let mut matches_and_texts: Vec<(usize, bool)> = Vec::new();
+        for (idx, line) in self.display_lines.iter().enumerate() {
+            let text = self.get_line_text(line);
+            let is_match = text.to_lowercase().contains(&query_lower);
+            matches_and_texts.push((idx, is_match));
+        }
+
+        // Second pass: mark matches
+        for (idx, is_match) in matches_and_texts {
+            match &mut self.display_lines[idx] {
+                DisplayLine::SyscallHeader {
+                    is_search_match, ..
+                } => *is_search_match = is_match,
+                DisplayLine::ArgumentsHeader {
+                    is_search_match, ..
+                } => *is_search_match = is_match,
+                DisplayLine::ArgumentLine {
+                    is_search_match, ..
+                } => *is_search_match = is_match,
+                DisplayLine::ReturnValue {
+                    is_search_match, ..
+                } => *is_search_match = is_match,
+                DisplayLine::Error {
+                    is_search_match, ..
+                } => *is_search_match = is_match,
+                DisplayLine::Duration {
+                    is_search_match, ..
+                } => *is_search_match = is_match,
+                DisplayLine::Signal {
+                    is_search_match, ..
+                } => *is_search_match = is_match,
+                DisplayLine::Exit {
+                    is_search_match, ..
+                } => *is_search_match = is_match,
+                DisplayLine::BacktraceHeader {
+                    is_search_match, ..
+                } => *is_search_match = is_match,
+                DisplayLine::BacktraceFrame {
+                    is_search_match, ..
+                } => *is_search_match = is_match,
+                DisplayLine::BacktraceResolved {
+                    is_search_match, ..
+                } => *is_search_match = is_match,
+            }
+
+            if is_match {
+                self.search_state.matches.push(idx);
+            }
+        }
+
+        // Update current_match_idx to point to nearest match
+        if !self.search_state.matches.is_empty() {
+            // Find first match at or after current position
+            let match_idx = self
+                .search_state
+                .matches
+                .iter()
+                .position(|&idx| idx >= self.selected_line)
+                .unwrap_or(0); // Wrap to first if no match after cursor
+
+            self.search_state.current_match_idx = match_idx;
+
+            if move_cursor {
+                log::debug!(
+                    "Moving cursor to first match at line {}",
+                    self.search_state.matches[match_idx]
+                );
+                self.selected_line = self.search_state.matches[match_idx];
+                self.ensure_visible();
+            }
+        }
+    }
+
+    pub fn search_next(&mut self) {
+        if self.search_state.matches.is_empty() {
+            return;
+        }
+
+        // Find first match AFTER current cursor position
+        let next_match = self
+            .search_state
+            .matches
+            .iter()
+            .position(|&idx| idx > self.selected_line);
+
+        if let Some(match_idx) = next_match {
+            // Found a match after cursor
+            self.search_state.current_match_idx = match_idx;
+        } else {
+            // Wrap to first match
+            self.search_state.current_match_idx = 0;
+        }
+
+        let match_line = self.search_state.matches[self.search_state.current_match_idx];
+        self.selected_line = match_line;
+        self.ensure_visible();
+    }
+
+    pub fn search_previous(&mut self) {
+        if self.search_state.matches.is_empty() {
+            return;
+        }
+
+        // Find last match BEFORE current cursor position
+        let prev_match = self
+            .search_state
+            .matches
+            .iter()
+            .rposition(|&idx| idx < self.selected_line);
+
+        if let Some(match_idx) = prev_match {
+            // Found a match before cursor
+            self.search_state.current_match_idx = match_idx;
+        } else {
+            // Wrap to last match
+            self.search_state.current_match_idx = self.search_state.matches.len() - 1;
+        }
+
+        let match_line = self.search_state.matches[self.search_state.current_match_idx];
+        self.selected_line = match_line;
+        self.ensure_visible();
+    }
+
+    fn ensure_visible(&mut self) {
+        if self.selected_line < self.scroll_offset {
+            self.scroll_offset = self.selected_line;
+        } else if self.selected_line >= self.scroll_offset + self.last_visible_height {
+            self.scroll_offset = self.selected_line.saturating_sub(self.last_visible_height) + 1;
+        }
+    }
+
+    pub fn handle_search_event(&mut self, event: KeyEvent) {
+        match event.code {
+            KeyCode::Char(c) if !event.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.search_state.query.push(c);
+                self.update_search_matches();
+            }
+            KeyCode::Backspace => {
+                self.search_state.query.pop();
+                self.update_search_matches();
+            }
+            KeyCode::Enter => {
+                // Accept search, stay at current position
+                self.search_state.active = false;
+            }
+            KeyCode::Esc => {
+                // Cancel search, return to original position
+                self.selected_line = self.search_state.original_position;
+                self.scroll_offset = self.search_state.original_scroll;
+                self.search_state.active = false;
+                self.search_state.query.clear();
+                self.update_search_matches(); // Clear highlights
+            }
+            KeyCode::Char('n') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.search_next();
+            }
+            KeyCode::Char('p') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.search_previous();
             }
             _ => {}
         }
