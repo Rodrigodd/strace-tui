@@ -583,18 +583,48 @@ impl App {
                     .unwrap_or(self.selected_line);
             }
             DisplayLine::ArgumentsHeader { entry_idx } => {
-                // On arguments header -> collapse arguments
+                // On arguments header -> collapse arguments if expanded, else collapse syscall
                 let idx = *entry_idx;
-                self.expanded_arguments.remove(&idx);
-                self.rebuild_display_lines();
-                // Already on header, no need to move
+                if self.expanded_arguments.contains(&idx) {
+                    log::debug!("Collapsing arguments {} from ArgumentsHeader", idx);
+                    self.expanded_arguments.remove(&idx);
+                    self.rebuild_display_lines();
+                    // Already on header, no need to move
+                } else {
+                    // Arguments already collapsed, collapse the parent syscall
+                    log::debug!("Arguments {} already collapsed, collapsing parent syscall", idx);
+                    self.expanded_items.remove(&idx);
+                    self.expanded_arguments.remove(&idx);
+                    self.expanded_backtraces.remove(&idx);
+                    self.rebuild_display_lines();
+                    
+                    // Move cursor to SyscallHeader
+                    self.selected_line = self.display_lines.iter()
+                        .position(|line| matches!(line, DisplayLine::SyscallHeader { entry_idx: i } if *i == idx))
+                        .unwrap_or(self.selected_line);
+                }
             }
             DisplayLine::BacktraceHeader { entry_idx } => {
-                // On backtrace header -> collapse backtrace
+                // On backtrace header -> collapse backtrace if expanded, else collapse syscall
                 let idx = *entry_idx;
-                self.expanded_backtraces.remove(&idx);
-                self.rebuild_display_lines();
-                // Already on header, no need to move
+                if self.expanded_backtraces.contains(&idx) {
+                    log::debug!("Collapsing backtrace {} from BacktraceHeader", idx);
+                    self.expanded_backtraces.remove(&idx);
+                    self.rebuild_display_lines();
+                    // Already on header, no need to move
+                } else {
+                    // Backtrace already collapsed, collapse the parent syscall
+                    log::debug!("Backtrace {} already collapsed, collapsing parent syscall", idx);
+                    self.expanded_items.remove(&idx);
+                    self.expanded_arguments.remove(&idx);
+                    self.expanded_backtraces.remove(&idx);
+                    self.rebuild_display_lines();
+                    
+                    // Move cursor to SyscallHeader
+                    self.selected_line = self.display_lines.iter()
+                        .position(|line| matches!(line, DisplayLine::SyscallHeader { entry_idx: i } if *i == idx))
+                        .unwrap_or(self.selected_line);
+                }
             }
             DisplayLine::SyscallHeader { entry_idx } 
             | DisplayLine::ReturnValue { entry_idx }
