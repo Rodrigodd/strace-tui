@@ -26,7 +26,7 @@ pub fn run_tui(
         // Get the cache directory (or state directory on Linux)
         let log_dir = dirs::cache_dir()
             .or_else(dirs::state_dir)
-            .unwrap_or_else(|| std::env::temp_dir());
+            .unwrap_or_else(std::env::temp_dir);
 
         let log_dir = log_dir.join("strace-tui");
 

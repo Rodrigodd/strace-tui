@@ -154,7 +154,10 @@ write(1, "test\n", 5) = 5
     // All entries should have PID 0 and empty timestamp
     for entry in &entries {
         assert_eq!(entry.pid, 0, "Entries without PID should have PID 0");
-        assert_eq!(entry.timestamp, "", "Entries without timestamp should have empty timestamp");
+        assert_eq!(
+            entry.timestamp, "",
+            "Entries without timestamp should have empty timestamp"
+        );
     }
 
     // Check first syscall
@@ -194,7 +197,10 @@ fn test_parse_pid_no_timestamp_format() {
     // All entries should have PID 172330 and empty timestamp
     for entry in &entries {
         assert_eq!(entry.pid, 172330, "Entries should have correct PID");
-        assert_eq!(entry.timestamp, "", "Entries without timestamp should have empty timestamp");
+        assert_eq!(
+            entry.timestamp, "",
+            "Entries without timestamp should have empty timestamp"
+        );
     }
 
     // Check first syscall
@@ -223,13 +229,13 @@ fn test_cli_parse_subcommand() {
 
     // Build first to ensure binary exists
     Command::new("cargo")
-        .args(&["build", "--quiet"])
+        .args(["build", "--quiet"])
         .status()
         .expect("Failed to build");
 
     // Run the parse subcommand using the built binary
     let output = Command::new("./target/debug/strace-tui")
-        .args(&["parse", temp_path, "--json"])
+        .args(["parse", temp_path, "--json"])
         .output()
         .expect("Failed to run parse command");
 
@@ -251,7 +257,7 @@ fn test_cli_trace_subcommand() {
 
     // Build first to ensure binary exists
     Command::new("cargo")
-        .args(&["build", "--quiet"])
+        .args(["build", "--quiet"])
         .status()
         .expect("Failed to build");
 
@@ -261,7 +267,7 @@ fn test_cli_trace_subcommand() {
 
     // Run the trace subcommand with output to file to avoid mixing traced program output with JSON
     let output = Command::new("./target/debug/strace-tui")
-        .args(&["trace", "--json", "--output", output_path, "echo", "test"])
+        .args(["trace", "--json", "--output", output_path, "echo", "test"])
         .output()
         .expect("Failed to run trace command");
 
