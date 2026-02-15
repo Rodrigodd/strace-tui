@@ -32,11 +32,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_divider(f, chunks[3]);
 
     // Draw footer
-    draw_footer(f, chunks[4]);
+    draw_footer(f, app, chunks[4]);
 
     // Draw help modal on top if active
     if app.show_help {
         draw_help(f);
+    }
+
+    // Draw filter modal on top if active
+    if app.show_filter_modal {
+        draw_filter_modal(f, app);
     }
 }
 
@@ -99,7 +104,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         let display_line = &app.display_lines[line_idx];
 
         let line_content = match display_line {
-            DisplayLine::SyscallHeader { entry_idx } => {
+            DisplayLine::SyscallHeader { entry_idx, is_hidden } => {
                 let entry = &app.entries[*entry_idx];
                 let is_expanded = app.expanded_items.contains(entry_idx);
                 let arrow = if is_expanded { "▼" } else { "▶" };
@@ -108,6 +113,13 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let has_error = entry.errno.is_some();
                 let is_signal = entry.signal.is_some();
                 let is_exit = entry.exit_info.is_some();
+
+                // Override color if hidden
+                let base_color_override = if *is_hidden && app.show_hidden {
+                    Some(Color::DarkGray)
+                } else {
+                    None
+                };
 
                 // For signals and exits, keep the old behavior (whole line colored)
                 if is_signal || is_exit {
@@ -130,11 +142,13 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     let metadata_time = format!(" {}", entry.timestamp);
                     let metadata_len = metadata_pid.chars().count() + metadata_time.chars().count();
 
-                    let color = if is_signal {
-                        Color::Yellow
-                    } else {
-                        Color::Cyan
-                    };
+                    let color = base_color_override.unwrap_or({
+                        if is_signal {
+                            Color::Yellow
+                        } else {
+                            Color::Cyan
+                        }
+                    });
 
                     if left_len + graph_len + metadata_len <= width {
                         let padding_len = width.saturating_sub(left_len + graph_len + metadata_len);
@@ -208,8 +222,8 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     let left_total = arrow_len + syscall_len + args_ret_len;
 
                     // Determine colors
-                    let syscall_color = syscall_category_color(syscall_name);
-                    let rest_color = if has_error { Color::Red } else { Color::White };
+                    let syscall_color = base_color_override.unwrap_or_else(|| syscall_category_color(syscall_name));
+                    let rest_color = base_color_override.unwrap_or(if has_error { Color::Red } else { Color::White });
 
                     if left_total + graph_len + metadata_len <= width {
                         // Enough space - build with padding
@@ -547,8 +561,19 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn draw_footer(f: &mut Frame, area: Rect) {
-    let footer = Paragraph::new("↑↓/jk: Navigate | ←→: Collapse/Expand | PgUp/PgDn: Page | Ctrl+U/D: Half | Enter: Toggle | x: Collapse | e/c: All | q: Quit | ?: Help")
+fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    let mut footer_text = String::from("↑↓/jk: Nav | ←→: Fold | Enter: Toggle | e/c: All | h: Hide | H: Filter | .: Ghost | q: Quit | ?: Help");
+    
+    // Add filter status
+    let hidden_count = app.hidden_syscalls.len();
+    if hidden_count > 0 {
+        footer_text.push_str(&format!(" | Hidden: {}", hidden_count));
+        if app.show_hidden {
+            footer_text.push_str(" (shown)");
+        }
+    }
+    
+    let footer = Paragraph::new(footer_text)
         .style(Style::default().fg(Color::DarkGray));
     f.render_widget(footer, area);
 }
@@ -589,15 +614,23 @@ fn draw_help(f: &mut Frame) {
         Line::from("  R           Resolve all backtraces (slow!)"),
         Line::from(""),
         Line::from(Span::styled(
+            "Filtering:",
+            Style::default().add_modifier(Modifier::UNDERLINED),
+        )),
+        Line::from("  h           Hide/show current syscall"),
+        Line::from("  H           Open filter modal"),
+        Line::from("  .           Toggle show hidden (ghost mode)"),
+        Line::from(""),
+        Line::from(Span::styled(
             "Other:",
             Style::default().add_modifier(Modifier::UNDERLINED),
         )),
         Line::from("  q/Q         Quit"),
-        Line::from("  ?/h         Toggle this help"),
+        Line::from("  ?           Toggle this help"),
         Line::from("  Ctrl+C      Force quit"),
         Line::from(""),
         Line::from(Span::styled(
-            "Press ? or Esc to close this help",
+            "Press ? or Esc to close help",
             Style::default().fg(Color::Yellow),
         )),
     ];
@@ -609,6 +642,45 @@ fn draw_help(f: &mut Frame) {
     let area = centered_rect(60, 80, f.area());
     f.render_widget(ratatui::widgets::Clear, area);
     f.render_widget(help, area);
+}
+
+fn draw_filter_modal(f: &mut Frame, app: &App) {
+    let modal_state = &app.filter_modal_state;
+    
+    // Build list items with checkboxes
+    let items: Vec<ListItem> = modal_state
+        .syscall_list
+        .iter()
+        .enumerate()
+        .map(|(idx, (name, count))| {
+            let is_hidden = app.hidden_syscalls.contains(name);
+            let checkbox = if is_hidden { "[ ]" } else { "[✓]" };
+            let text = format!("{} {} ({} calls)", checkbox, name, count);
+            
+            let style = if idx == modal_state.selected_index {
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            } else if is_hidden {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default()
+            };
+            
+            ListItem::new(Line::from(text)).style(style)
+        })
+        .collect();
+    
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Filter Syscalls (Space: Toggle | a: Toggle All | Esc: Close)")
+        );
+    
+    let area = centered_rect(70, 70, f.area());
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(list, area);
 }
 
 fn truncate(s: &str, max_len: usize) -> String {

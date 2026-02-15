@@ -21,6 +21,7 @@ pub type TreePrefix = [TreeElement; MAX_TREE_DEPTH];
 pub enum DisplayLine {
     SyscallHeader {
         entry_idx: usize,
+        is_hidden: bool,
     },
     ArgumentsHeader {
         entry_idx: usize,
@@ -70,7 +71,7 @@ pub enum DisplayLine {
 impl DisplayLine {
     fn entry_idx(&self) -> usize {
         match self {
-            DisplayLine::SyscallHeader { entry_idx } => *entry_idx,
+            DisplayLine::SyscallHeader { entry_idx, .. } => *entry_idx,
             DisplayLine::ArgumentsHeader { entry_idx, .. } => *entry_idx,
             DisplayLine::ArgumentLine { entry_idx, .. } => *entry_idx,
             DisplayLine::ReturnValue { entry_idx, .. } => *entry_idx,
@@ -83,6 +84,12 @@ impl DisplayLine {
             DisplayLine::BacktraceResolved { entry_idx, .. } => *entry_idx,
         }
     }
+}
+
+pub struct FilterModalState {
+    pub syscall_list: Vec<(String, usize)>, // (syscall_name, count)
+    pub selected_index: usize,
+    pub scroll_offset: usize,
 }
 
 pub struct App {
@@ -104,6 +111,12 @@ pub struct App {
     pub last_collapsed_position: Option<usize>, // Remember position before collapse for right arrow
     pub last_collapsed_scroll: Option<usize>, // Remember scroll_offset before collapse
 
+    // Filter state
+    pub hidden_syscalls: HashSet<String>,
+    pub show_hidden: bool,
+    pub show_filter_modal: bool,
+    pub filter_modal_state: FilterModalState,
+
     // Flags
     pub should_quit: bool,
     pub show_help: bool,
@@ -116,6 +129,17 @@ impl App {
         file_path: Option<String>,
     ) -> Self {
         let process_graph = ProcessGraph::build(&entries);
+
+        // Build syscall list for filter modal
+        let mut syscall_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for entry in &entries {
+            if !entry.syscall_name.is_empty() {
+                *syscall_counts.entry(entry.syscall_name.clone()).or_insert(0) += 1;
+            }
+        }
+        let mut syscall_list: Vec<(String, usize)> = syscall_counts.into_iter().collect();
+        syscall_list.sort_by(|a, b| a.0.cmp(&b.0)); // Sort by name
 
         let mut app = Self {
             entries,
@@ -132,6 +156,14 @@ impl App {
             last_visible_height: 20, // Default, will be updated on first draw
             last_collapsed_position: None,
             last_collapsed_scroll: None,
+            hidden_syscalls: HashSet::new(),
+            show_hidden: false,
+            show_filter_modal: false,
+            filter_modal_state: FilterModalState {
+                syscall_list,
+                selected_index: 0,
+                scroll_offset: 0,
+            },
             should_quit: false,
             show_help: false,
         };
@@ -270,9 +302,19 @@ impl App {
         self.display_lines.clear();
 
         for (idx, entry) in self.entries.iter().enumerate() {
+            // Check if this syscall should be hidden
+            let is_hidden = self.hidden_syscalls.contains(&entry.syscall_name);
+            
+            // Skip hidden items unless show_hidden is true
+            if is_hidden && !self.show_hidden {
+                continue;
+            }
+
             // Always add the syscall header
-            self.display_lines
-                .push(DisplayLine::SyscallHeader { entry_idx: idx });
+            self.display_lines.push(DisplayLine::SyscallHeader {
+                entry_idx: idx,
+                is_hidden,
+            });
 
             // Add expanded details if item is expanded
             if self.expanded_items.contains(&idx) {
@@ -442,11 +484,17 @@ impl App {
     }
 
     pub fn handle_event(&mut self, event: KeyEvent) {
+        // Handle filter modal if open
+        if self.show_filter_modal {
+            self.handle_filter_modal_event(event);
+            return;
+        }
+
         // Handle help screen toggle
         if self.show_help {
             if matches!(
                 event.code,
-                KeyCode::Char('?') | KeyCode::Char('h') | KeyCode::Esc
+                KeyCode::Char('?') | KeyCode::Esc
             ) {
                 self.show_help = false;
             }
@@ -463,8 +511,19 @@ impl App {
             }
 
             // Help
-            KeyCode::Char('?') | KeyCode::Char('h') => {
+            KeyCode::Char('?') => {
                 self.show_help = true;
+            }
+
+            // Filter controls
+            KeyCode::Char('h') => {
+                self.toggle_current_syscall_visibility();
+            }
+            KeyCode::Char('H') => {
+                self.open_filter_modal();
+            }
+            KeyCode::Char('.') => {
+                self.toggle_show_hidden();
             }
 
             // Navigation
@@ -628,7 +687,7 @@ impl App {
         }
 
         match &self.display_lines[self.selected_line] {
-            DisplayLine::SyscallHeader { entry_idx } => {
+            DisplayLine::SyscallHeader { entry_idx, .. } => {
                 // Toggle syscall expansion
                 let idx = *entry_idx;
                 if self.expanded_items.contains(&idx) {
@@ -742,7 +801,7 @@ impl App {
         );
 
         match &self.display_lines[self.selected_line] {
-            DisplayLine::SyscallHeader { entry_idx } => {
+            DisplayLine::SyscallHeader { entry_idx, .. } => {
                 // Expand syscall if not already expanded
                 let idx = *entry_idx;
                 if !self.expanded_items.contains(&idx) {
@@ -928,7 +987,7 @@ impl App {
 
                     // Move cursor to SyscallHeader
                     self.selected_line = self.display_lines.iter()
-                        .position(|line| matches!(line, DisplayLine::SyscallHeader { entry_idx: i } if *i == idx))
+                        .position(|line| matches!(line, DisplayLine::SyscallHeader { entry_idx: i, .. } if *i == idx))
                         .unwrap_or(self.selected_line);
                 }
             }
@@ -953,11 +1012,11 @@ impl App {
 
                     // Move cursor to SyscallHeader
                     self.selected_line = self.display_lines.iter()
-                        .position(|line| matches!(line, DisplayLine::SyscallHeader { entry_idx: i } if *i == idx))
+                        .position(|line| matches!(line, DisplayLine::SyscallHeader { entry_idx: i, .. } if *i == idx))
                         .unwrap_or(self.selected_line);
                 }
             }
-            DisplayLine::SyscallHeader { entry_idx }
+            DisplayLine::SyscallHeader { entry_idx, .. }
             | DisplayLine::ReturnValue { entry_idx, .. }
             | DisplayLine::Error { entry_idx, .. }
             | DisplayLine::Duration { entry_idx, .. }
@@ -972,7 +1031,7 @@ impl App {
 
                 // Move cursor to SyscallHeader
                 self.selected_line = self.display_lines.iter()
-                    .position(|line| matches!(line, DisplayLine::SyscallHeader { entry_idx: i } if *i == idx))
+                    .position(|line| matches!(line, DisplayLine::SyscallHeader { entry_idx: i, .. } if *i == idx))
                     .unwrap_or(self.selected_line);
             }
         }
@@ -1001,7 +1060,7 @@ impl App {
 
         // Find the entry_idx of the current line and collapse it
         let entry_idx = match &self.display_lines[self.selected_line] {
-            DisplayLine::SyscallHeader { entry_idx } => Some(*entry_idx),
+            DisplayLine::SyscallHeader { entry_idx, .. } => Some(*entry_idx),
             DisplayLine::ArgumentsHeader { entry_idx, .. } => {
                 // For arguments header, collapse just the arguments
                 let idx = *entry_idx;
@@ -1088,6 +1147,97 @@ impl App {
         }
     }
 
+    // Filter management methods
+    pub fn toggle_current_syscall_visibility(&mut self) {
+        if self.selected_line >= self.display_lines.len() {
+            return;
+        }
+
+        let entry_idx = self.display_lines[self.selected_line].entry_idx();
+        if let Some(entry) = self.entries.get(entry_idx) {
+            let syscall_name = entry.syscall_name.clone();
+            if self.hidden_syscalls.contains(&syscall_name) {
+                self.hidden_syscalls.remove(&syscall_name);
+            } else {
+                self.hidden_syscalls.insert(syscall_name);
+            }
+            self.rebuild_display_lines();
+            
+            // Adjust selection if current line is now hidden
+            if self.selected_line >= self.display_lines.len() && !self.display_lines.is_empty() {
+                self.selected_line = self.display_lines.len() - 1;
+            }
+        }
+    }
+
+    pub fn toggle_show_hidden(&mut self) {
+        self.show_hidden = !self.show_hidden;
+        self.rebuild_display_lines();
+    }
+
+    pub fn open_filter_modal(&mut self) {
+        self.show_filter_modal = true;
+        self.filter_modal_state.selected_index = 0;
+        self.filter_modal_state.scroll_offset = 0;
+    }
+
+    pub fn close_filter_modal(&mut self) {
+        self.show_filter_modal = false;
+    }
+
+    pub fn toggle_all_syscalls(&mut self) {
+        if self.hidden_syscalls.is_empty() {
+            // Hide all
+            for (syscall_name, _) in &self.filter_modal_state.syscall_list {
+                self.hidden_syscalls.insert(syscall_name.clone());
+            }
+        } else {
+            // Show all
+            self.hidden_syscalls.clear();
+        }
+        self.rebuild_display_lines();
+    }
+
+    pub fn handle_filter_modal_event(&mut self, event: KeyEvent) {
+        match event.code {
+            KeyCode::Esc | KeyCode::Char('H') => {
+                self.close_filter_modal();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.filter_modal_state.selected_index > 0 {
+                    self.filter_modal_state.selected_index -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.filter_modal_state.selected_index + 1
+                    < self.filter_modal_state.syscall_list.len()
+                {
+                    self.filter_modal_state.selected_index += 1;
+                }
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                // Toggle the selected syscall
+                if let Some((syscall_name, _)) = self
+                    .filter_modal_state
+                    .syscall_list
+                    .get(self.filter_modal_state.selected_index)
+                {
+                    let syscall_name = syscall_name.clone();
+                    if self.hidden_syscalls.contains(&syscall_name) {
+                        self.hidden_syscalls.remove(&syscall_name);
+                    } else {
+                        self.hidden_syscalls.insert(syscall_name);
+                    }
+                    self.rebuild_display_lines();
+                }
+            }
+            KeyCode::Char('a') => {
+                self.toggle_all_syscalls();
+            }
+            _ => {}
+        }
+    }
+
     fn resolve_current_backtrace(&mut self) {
         if self.selected_line >= self.display_lines.len() {
             return;
@@ -1095,7 +1245,7 @@ impl App {
 
         // Find the entry_idx from the current line
         let entry_idx = match &self.display_lines[self.selected_line] {
-            DisplayLine::SyscallHeader { entry_idx } => Some(*entry_idx),
+            DisplayLine::SyscallHeader { entry_idx, .. } => Some(*entry_idx),
             DisplayLine::ArgumentsHeader { entry_idx, .. } => Some(*entry_idx),
             DisplayLine::ArgumentLine { entry_idx, .. } => Some(*entry_idx),
             DisplayLine::ReturnValue { entry_idx, .. } => Some(*entry_idx),
