@@ -353,10 +353,12 @@ impl App {
                 // Toggle syscall expansion
                 let idx = *entry_idx;
                 if self.expanded_items.contains(&idx) {
+                    log::debug!("Collapsing syscall {}", idx);
                     self.expanded_items.remove(&idx);
                     self.expanded_backtraces.remove(&idx);
                 } else {
                     // Save scroll position before expanding
+                    log::debug!("Expanding syscall {}, saving scroll_offset={}", idx, self.scroll_offset);
                     self.last_collapsed_scroll = Some(self.scroll_offset);
                     let header_line = self.selected_line;
                     
@@ -365,6 +367,7 @@ impl App {
                     
                     // Adjust scroll to show entire expanded item
                     self.adjust_scroll_after_expansion(header_line);
+                    log::debug!("After expansion adjustment, scroll_offset={}", self.scroll_offset);
                     return;
                 }
                 self.rebuild_display_lines();
@@ -373,9 +376,11 @@ impl App {
                 // Toggle backtrace expansion
                 let idx = *entry_idx;
                 if self.expanded_backtraces.contains(&idx) {
+                    log::debug!("Collapsing backtrace {}", idx);
                     self.expanded_backtraces.remove(&idx);
                 } else {
                     // Save scroll position before expanding
+                    log::debug!("Expanding backtrace {}, saving scroll_offset={}", idx, self.scroll_offset);
                     self.last_collapsed_scroll = Some(self.scroll_offset);
                     let header_line = self.selected_line;
                     
@@ -390,6 +395,7 @@ impl App {
                     
                     // Adjust scroll to show entire expanded item
                     self.adjust_scroll_after_expansion(header_line);
+                    log::debug!("After expansion adjustment, scroll_offset={}", self.scroll_offset);
                     return;
                 }
                 self.rebuild_display_lines();
@@ -398,9 +404,11 @@ impl App {
                 // Toggle arguments expansion
                 let idx = *entry_idx;
                 if self.expanded_arguments.contains(&idx) {
+                    log::debug!("Collapsing arguments {}", idx);
                     self.expanded_arguments.remove(&idx);
                 } else {
                     // Save scroll position before expanding
+                    log::debug!("Expanding arguments {}, saving scroll_offset={}", idx, self.scroll_offset);
                     self.last_collapsed_scroll = Some(self.scroll_offset);
                     let header_line = self.selected_line;
                     
@@ -409,6 +417,7 @@ impl App {
                     
                     // Adjust scroll to show entire expanded item
                     self.adjust_scroll_after_expansion(header_line);
+                    log::debug!("After expansion adjustment, scroll_offset={}", self.scroll_offset);
                     return;
                 }
                 self.rebuild_display_lines();
@@ -427,11 +436,15 @@ impl App {
         let saved_position = self.last_collapsed_position;
         let saved_scroll = self.last_collapsed_scroll;
         
+        log::debug!("expand_current: selected_line={}, saved_position={:?}, saved_scroll={:?}", 
+                   self.selected_line, saved_position, saved_scroll);
+        
         match &self.display_lines[self.selected_line] {
             DisplayLine::SyscallHeader { entry_idx } => {
                 // Expand syscall if not already expanded
                 let idx = *entry_idx;
                 if !self.expanded_items.contains(&idx) {
+                    log::debug!("Expanding syscall {}", idx);
                     let header_line = self.selected_line;
                     self.expanded_items.insert(idx);
                     self.rebuild_display_lines();
@@ -439,16 +452,20 @@ impl App {
                     // Restore cursor position if we just collapsed this
                     if let Some(saved_line) = saved_position {
                         if saved_line < self.display_lines.len() {
+                            log::debug!("Restoring cursor position to {}", saved_line);
                             self.selected_line = saved_line;
                         }
                     }
                     
                     // Restore or adjust scroll
                     if let Some(saved) = saved_scroll {
+                        log::debug!("Restoring scroll_offset to {}", saved);
                         self.scroll_offset = saved;
                     } else {
+                        log::debug!("No saved scroll, adjusting after expansion");
                         self.adjust_scroll_after_expansion(header_line);
                     }
+                    log::debug!("After expand_current (syscall), scroll_offset={}", self.scroll_offset);
                 }
             }
             DisplayLine::ArgumentsHeader { entry_idx } => {
@@ -518,6 +535,9 @@ impl App {
             return;
         }
         
+        log::debug!("collapse_deepest: selected_line={}, scroll_offset={}, last_collapsed_scroll={:?}", 
+                   self.selected_line, self.scroll_offset, self.last_collapsed_scroll);
+        
         // Save current position for potential re-expansion with right arrow
         let saved_position = Some(self.selected_line);
         
@@ -529,6 +549,7 @@ impl App {
             DisplayLine::ArgumentLine { entry_idx, .. } => {
                 // In an argument line -> collapse arguments
                 let idx = *entry_idx;
+                log::debug!("Collapsing arguments {} from ArgumentLine", idx);
                 self.expanded_arguments.remove(&idx);
                 self.rebuild_display_lines();
                 
@@ -585,7 +606,10 @@ impl App {
         
         // Restore the scroll position from before expansion
         if let Some(scroll) = scroll_to_restore {
+            log::debug!("Restoring scroll_offset from {} to {}", self.scroll_offset, scroll);
             self.scroll_offset = scroll;
+        } else {
+            log::debug!("No saved scroll to restore");
         }
         
         // Save position for potential re-expansion with right arrow

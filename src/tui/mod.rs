@@ -17,12 +17,29 @@ use ratatui::{
     Terminal,
 };
 use std::io;
+use std::fs::OpenOptions;
+use log::LevelFilter;
 
 pub fn run_tui(
     entries: Vec<crate::parser::SyscallEntry>,
     summary: crate::parser::SummaryStats,
     file_path: Option<String>,
 ) -> io::Result<()> {
+    // Initialize logging to file
+    let log_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open("/tmp/strace-tui.log")
+        .expect("Failed to create log file");
+    
+    env_logger::Builder::new()
+        .target(env_logger::Target::Pipe(Box::new(log_file)))
+        .filter_level(LevelFilter::Debug)
+        .init();
+    
+    log::info!("Starting strace-tui");
+    
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
