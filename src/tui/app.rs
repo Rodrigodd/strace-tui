@@ -434,10 +434,9 @@ impl App {
         }
         
         let saved_position = self.last_collapsed_position;
-        let saved_scroll = self.last_collapsed_scroll;
         
-        log::debug!("expand_current: selected_line={}, saved_position={:?}, saved_scroll={:?}", 
-                   self.selected_line, saved_position, saved_scroll);
+        log::debug!("expand_current: selected_line={}, saved_position={:?}", 
+                   self.selected_line, saved_position);
         
         match &self.display_lines[self.selected_line] {
             DisplayLine::SyscallHeader { entry_idx } => {
@@ -446,6 +445,11 @@ impl App {
                 if !self.expanded_items.contains(&idx) {
                     log::debug!("Expanding syscall {}", idx);
                     let header_line = self.selected_line;
+                    
+                    // Save current scroll for future collapse (always save before expanding)
+                    log::debug!("Saving scroll_offset={} for future collapse", self.scroll_offset);
+                    self.last_collapsed_scroll = Some(self.scroll_offset);
+                    
                     self.expanded_items.insert(idx);
                     self.rebuild_display_lines();
                     
@@ -457,14 +461,9 @@ impl App {
                         }
                     }
                     
-                    // Restore or adjust scroll
-                    if let Some(saved) = saved_scroll {
-                        log::debug!("Restoring scroll_offset to {}", saved);
-                        self.scroll_offset = saved;
-                    } else {
-                        log::debug!("No saved scroll, adjusting after expansion");
-                        self.adjust_scroll_after_expansion(header_line);
-                    }
+                    // Always adjust scroll to show full list when expanding
+                    log::debug!("Adjusting scroll after expansion");
+                    self.adjust_scroll_after_expansion(header_line);
                     log::debug!("After expand_current (syscall), scroll_offset={}", self.scroll_offset);
                 }
             }
@@ -472,30 +471,41 @@ impl App {
                 // Expand arguments if not already expanded
                 let idx = *entry_idx;
                 if !self.expanded_arguments.contains(&idx) {
+                    log::debug!("Expanding arguments {}", idx);
                     let header_line = self.selected_line;
+                    
+                    // Save current scroll for future collapse (always save before expanding)
+                    log::debug!("Saving scroll_offset={} for future collapse", self.scroll_offset);
+                    self.last_collapsed_scroll = Some(self.scroll_offset);
+                    
                     self.expanded_arguments.insert(idx);
                     self.rebuild_display_lines();
                     
                     // Restore cursor position if we just collapsed this
                     if let Some(saved_line) = saved_position {
                         if saved_line < self.display_lines.len() {
+                            log::debug!("Restoring cursor position to {}", saved_line);
                             self.selected_line = saved_line;
                         }
                     }
                     
-                    // Restore or adjust scroll
-                    if let Some(saved) = saved_scroll {
-                        self.scroll_offset = saved;
-                    } else {
-                        self.adjust_scroll_after_expansion(header_line);
-                    }
+                    // Always adjust scroll to show full list when expanding
+                    log::debug!("Adjusting scroll after expansion");
+                    self.adjust_scroll_after_expansion(header_line);
+                    log::debug!("After expand_current (arguments), scroll_offset={}", self.scroll_offset);
                 }
             }
             DisplayLine::BacktraceHeader { entry_idx } => {
                 // Expand backtrace if not already expanded
                 let idx = *entry_idx;
                 if !self.expanded_backtraces.contains(&idx) {
+                    log::debug!("Expanding backtrace {}", idx);
                     let header_line = self.selected_line;
+                    
+                    // Save current scroll for future collapse (always save before expanding)
+                    log::debug!("Saving scroll_offset={} for future collapse", self.scroll_offset);
+                    self.last_collapsed_scroll = Some(self.scroll_offset);
+                    
                     self.expanded_backtraces.insert(idx);
                     // Resolve on-demand
                     if let Some(entry) = self.entries.get_mut(idx) {
@@ -508,16 +518,15 @@ impl App {
                     // Restore cursor position if we just collapsed this
                     if let Some(saved_line) = saved_position {
                         if saved_line < self.display_lines.len() {
+                            log::debug!("Restoring cursor position to {}", saved_line);
                             self.selected_line = saved_line;
                         }
                     }
                     
-                    // Restore or adjust scroll
-                    if let Some(saved) = saved_scroll {
-                        self.scroll_offset = saved;
-                    } else {
-                        self.adjust_scroll_after_expansion(header_line);
-                    }
+                    // Always adjust scroll to show full list when expanding
+                    log::debug!("Adjusting scroll after expansion");
+                    self.adjust_scroll_after_expansion(header_line);
+                    log::debug!("After expand_current (backtrace), scroll_offset={}", self.scroll_offset);
                 }
             }
             _ => {
@@ -525,9 +534,12 @@ impl App {
             }
         }
         
-        // Clear the saved position and scroll after using it
-        self.last_collapsed_position = None;
-        self.last_collapsed_scroll = None;
+        // Only clear saved position if we used it (restored cursor)
+        if saved_position.is_some() {
+            log::debug!("Clearing saved position after restore");
+            self.last_collapsed_position = None;
+        }
+        // Keep last_collapsed_scroll for the next collapse
     }
 
     fn collapse_deepest(&mut self) {
