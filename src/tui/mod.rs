@@ -13,7 +13,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io;
 
 pub fn run_tui(
@@ -23,19 +23,30 @@ pub fn run_tui(
 ) -> io::Result<()> {
     // Initialize logging to file only if RUST_LOG is set
     if std::env::var("RUST_LOG").is_ok() {
+        // Get the cache directory (or state directory on Linux)
+        let log_dir = dirs::cache_dir()
+            .or_else(dirs::state_dir)
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+
+        let log_dir = log_dir.join("strace-tui");
+
+        // Create the directory if it doesn't exist
+        fs::create_dir_all(&log_dir).expect("Failed to create log directory");
+
+        let log_path = log_dir.join("strace-tui.log");
+
         let log_file = OpenOptions::new()
             .create(true)
-            .write(true)
-            .truncate(true)
-            .open("/tmp/strace-tui.log")
-            .expect("Failed to create log file");
+            .append(true)
+            .open(&log_path)
+            .expect("Failed to open log file");
 
         env_logger::Builder::new()
             .target(env_logger::Target::Pipe(Box::new(log_file)))
             .parse_default_env()
             .init();
 
-        log::info!("Starting strace-tui");
+        log::info!("Starting strace-tui - log file: {}", log_path.display());
     }
 
     // Setup terminal
