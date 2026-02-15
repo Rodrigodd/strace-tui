@@ -565,7 +565,30 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             }
         };
 
-        items.push(ListItem::new(line_content));
+        // Check if this line is a search match
+        let is_search_match = match display_line {
+            DisplayLine::SyscallHeader { is_search_match, .. } => *is_search_match,
+            DisplayLine::ArgumentsHeader { is_search_match, .. } => *is_search_match,
+            DisplayLine::ArgumentLine { is_search_match, .. } => *is_search_match,
+            DisplayLine::ReturnValue { is_search_match, .. } => *is_search_match,
+            DisplayLine::Error { is_search_match, .. } => *is_search_match,
+            DisplayLine::Duration { is_search_match, .. } => *is_search_match,
+            DisplayLine::Signal { is_search_match, .. } => *is_search_match,
+            DisplayLine::Exit { is_search_match, .. } => *is_search_match,
+            DisplayLine::BacktraceHeader { is_search_match, .. } => *is_search_match,
+            DisplayLine::BacktraceFrame { is_search_match, .. } => *is_search_match,
+            DisplayLine::BacktraceResolved { is_search_match, .. } => *is_search_match,
+        };
+
+        // Apply search highlight style
+        let item = if is_search_match {
+            // Darker yellow for other matches
+            ListItem::new(line_content).style(Style::default().bg(Color::Rgb(60, 60, 0)))
+        } else {
+            ListItem::new(line_content)
+        };
+
+        items.push(item);
     }
 
     let list = List::new(items).highlight_style(
