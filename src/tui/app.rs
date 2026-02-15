@@ -193,7 +193,7 @@ impl App {
                 TreeElement::Branch => {
                     if idx == last_idx - 1 {
                         // Last element for header: just "├" without horizontal
-                        result.push_str("├");
+                        result.push('├');
                     } else {
                         result.push_str("├─ ");
                     }
@@ -201,7 +201,7 @@ impl App {
                 TreeElement::LastBranch => {
                     if idx == last_idx - 1 {
                         // Last element for header: just "└" without horizontal
-                        result.push_str("└");
+                        result.push('└');
                     } else {
                         result.push_str("└─ ");
                     }

@@ -1,9 +1,10 @@
 use super::{BacktraceFrame, ParseResult, ResolvedLocation};
 use std::collections::HashMap;
-use std::process::Command;
 
 /// Resolver for converting addresses to source locations using addr2line
 pub struct Addr2LineResolver {
+    /// Cache of loaders per binary path
+    loaders: HashMap<String, addr2line::Loader>,
     /// Cache of resolved addresses to avoid redundant lookups
     cache: HashMap<String, Option<ResolvedLocation>>,
 }
@@ -11,6 +12,7 @@ pub struct Addr2LineResolver {
 impl Addr2LineResolver {
     pub fn new() -> Self {
         Self {
+            loaders: HashMap::new(),
             cache: HashMap::new(),
         }
     }
@@ -31,7 +33,7 @@ impl Addr2LineResolver {
         }
 
         // Try to resolve using addr2line
-        let resolved = self.call_addr2line(&frame.binary, &frame.address)?;
+        let resolved = self.resolve_address(&frame.binary, &frame.address);
 
         // Cache the result
         self.cache.insert(cache_key, resolved.clone());
@@ -49,63 +51,48 @@ impl Addr2LineResolver {
         Ok(())
     }
 
-    /// Call addr2line binary to resolve an address
-    fn call_addr2line(&self, binary: &str, address: &str) -> ParseResult<Option<ResolvedLocation>> {
-        // Check if addr2line is available
-        let output = Command::new("addr2line")
-            .arg("-e")
-            .arg(binary)
-            .arg("-f") // Show function names
-            .arg("-C") // Demangle
-            .arg(address)
-            .output();
-
-        let output = match output {
-            Ok(out) => out,
-            Err(_e) => {
-                // addr2line not available or other error
-                return Ok(None);
-            }
-        };
-
-        if !output.status.success() {
-            return Ok(None);
+    /// Get or create a loader for the given binary
+    fn get_loader(&mut self, binary: &str) -> Option<&addr2line::Loader> {
+        // If already loaded, return it
+        if self.loaders.contains_key(binary) {
+            return self.loaders.get(binary);
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let lines: Vec<&str> = stdout.lines().collect();
-
-        // addr2line output format:
-        // function_name
-        // file:line
-        if lines.len() >= 2 {
-            let location_line = lines[1];
-
-            // Parse file:line or file:line:column
-            if let Some((file, rest)) = location_line.split_once(':') {
-                // Skip ?? which means unknown
-                if file == "??" {
-                    return Ok(None);
-                }
-
-                // Parse line number
-                let line_num = if let Some((line_str, _col)) = rest.split_once(':') {
-                    line_str.parse().ok()
-                } else {
-                    rest.parse().ok()
-                };
-
-                if let Some(line) = line_num {
-                    return Ok(Some(ResolvedLocation {
-                        file: file.to_string(),
-                        line,
-                        column: None,
-                    }));
-                }
+        // Try to load the binary
+        match addr2line::Loader::new(binary) {
+            Ok(loader) => {
+                self.loaders.insert(binary.to_string(), loader);
+                self.loaders.get(binary)
             }
+            Err(_) => None,
+        }
+    }
+
+    /// Resolve an address using addr2line crate
+    fn resolve_address(&mut self, binary: &str, address_str: &str) -> Option<ResolvedLocation> {
+        log::debug!("Resolving address {} in binary {}", address_str, binary);
+        // Get or create loader for this binary
+        let loader = self.get_loader(binary)?;
+
+        // Parse address (handle 0x prefix)
+        let address_str = address_str.strip_prefix("0x").unwrap_or(address_str);
+        let address = u64::from_str_radix(address_str, 16).ok()?;
+
+        // Find location
+        if let Ok(Some(location)) = loader.find_location(address) {
+            // Skip if file is unknown
+            if location.file == Some("??") {
+                return None;
+            }
+
+            return Some(ResolvedLocation {
+                file: location.file?.to_string(),
+                line: location.line?,
+                column: location.column,
+            });
         }
 
-        Ok(None)
+        None
     }
 }
 

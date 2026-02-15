@@ -18,6 +18,7 @@ serde_json = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 thiserror = "2.0"
 tempfile = "3.13"
+addr2line = "0.24"
 
 # TUI
 ratatui = "0.28"
