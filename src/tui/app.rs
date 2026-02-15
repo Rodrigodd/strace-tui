@@ -1234,48 +1234,52 @@ impl App {
         let entry_idx = self.display_lines[self.selected_line].entry_idx();
         let syscall_name = self.entries[entry_idx].syscall_name.clone();
         let was_hiding = !self.hidden_syscalls.contains(&syscall_name);
-        
+
         // Save screen position (0 = top of screen, increases downward)
         let screen_position = self.selected_line.saturating_sub(self.scroll_offset);
-        
+
         // Toggle visibility
         if self.hidden_syscalls.contains(&syscall_name) {
             self.hidden_syscalls.remove(&syscall_name);
         } else {
             self.hidden_syscalls.insert(syscall_name);
         }
-        
+
         self.rebuild_display_lines();
-        
+
         // If we're showing hidden items (ghost mode), the item is still visible
         // Just keep cursor on it
-        if self.show_hidden {
-            if let Some(new_line) = self.display_lines.iter()
+        if self.show_hidden
+            && let Some(new_line) = self
+                .display_lines
+                .iter()
                 .position(|line| line.entry_idx() == entry_idx)
-            {
-                self.selected_line = new_line;
-                self.scroll_offset = new_line.saturating_sub(screen_position);
-                return;
-            }
+        {
+            self.selected_line = new_line;
+            self.scroll_offset = new_line.saturating_sub(screen_position);
+            return;
         }
-        
+
         // If we just hid an item (and not in ghost mode), find next visible item
         if was_hiding && !self.show_hidden {
             // Try to find next non-hidden line starting from next entry
             let next_line = self.find_next_visible_line_after(entry_idx);
-            
+
             if let Some(line) = next_line {
                 self.selected_line = line;
             } else {
                 // No visible line after, try from beginning
                 self.selected_line = self.find_first_visible_line().unwrap_or(0);
             }
-            
+
             // Preserve screen position: adjust scroll to keep cursor at same vertical position
             self.scroll_offset = self.selected_line.saturating_sub(screen_position);
-            
+
             // Clamp scroll_offset to valid range
-            let max_scroll = self.display_lines.len().saturating_sub(self.last_visible_height);
+            let max_scroll = self
+                .display_lines
+                .len()
+                .saturating_sub(self.last_visible_height);
             self.scroll_offset = self.scroll_offset.min(max_scroll);
         } else {
             // Just unhid something, keep cursor clamped
@@ -1287,22 +1291,30 @@ impl App {
 
     fn find_next_visible_line_after(&self, entry_idx: usize) -> Option<usize> {
         // Find the first display line after entry_idx that belongs to a non-hidden entry
-        self.display_lines.iter()
+        self.display_lines
+            .iter()
             .enumerate()
             .find(|(_, line)| {
                 let idx = line.entry_idx();
-                idx > entry_idx && 
-                (self.show_hidden || !self.hidden_syscalls.contains(&self.entries[idx].syscall_name))
+                idx > entry_idx
+                    && (self.show_hidden
+                        || !self
+                            .hidden_syscalls
+                            .contains(&self.entries[idx].syscall_name))
             })
             .map(|(i, _)| i)
     }
 
     fn find_first_visible_line(&self) -> Option<usize> {
-        self.display_lines.iter()
+        self.display_lines
+            .iter()
             .enumerate()
             .find(|(_, line)| {
                 let idx = line.entry_idx();
-                self.show_hidden || !self.hidden_syscalls.contains(&self.entries[idx].syscall_name)
+                self.show_hidden
+                    || !self
+                        .hidden_syscalls
+                        .contains(&self.entries[idx].syscall_name)
             })
             .map(|(i, _)| i)
     }
@@ -1829,27 +1841,30 @@ impl App {
 
     fn update_modal_search_matches(&mut self) {
         self.modal_search_state.matches.clear();
-        
+
         if self.modal_search_state.query.is_empty() {
             return;
         }
-        
+
         let query_lower = self.modal_search_state.query.to_lowercase();
-        
+
         // Search in syscall names
-        for (idx, (syscall_name, _count)) in self.filter_modal_state.syscall_list.iter().enumerate() {
+        for (idx, (syscall_name, _count)) in self.filter_modal_state.syscall_list.iter().enumerate()
+        {
             if syscall_name.to_lowercase().contains(&query_lower) {
                 self.modal_search_state.matches.push(idx);
             }
         }
-        
+
         // Focus on first match after current position
         if !self.modal_search_state.matches.is_empty() {
-            let match_idx = self.modal_search_state.matches
+            let match_idx = self
+                .modal_search_state
+                .matches
                 .iter()
                 .position(|&idx| idx >= self.filter_modal_state.selected_index)
                 .unwrap_or(0);
-            
+
             self.modal_search_state.current_match_idx = match_idx;
             self.filter_modal_state.selected_index = self.modal_search_state.matches[match_idx];
             self.ensure_modal_visible();
@@ -1860,19 +1875,21 @@ impl App {
         if self.modal_search_state.matches.is_empty() {
             return;
         }
-        
+
         // Find first match AFTER current cursor position
-        let next_match = self.modal_search_state.matches
+        let next_match = self
+            .modal_search_state
+            .matches
             .iter()
             .position(|&idx| idx > self.filter_modal_state.selected_index);
-        
+
         if let Some(match_idx) = next_match {
             self.modal_search_state.current_match_idx = match_idx;
         } else {
             // Wrap to first match
             self.modal_search_state.current_match_idx = 0;
         }
-        
+
         let match_idx = self.modal_search_state.matches[self.modal_search_state.current_match_idx];
         self.filter_modal_state.selected_index = match_idx;
         self.ensure_modal_visible();
@@ -1882,19 +1899,21 @@ impl App {
         if self.modal_search_state.matches.is_empty() {
             return;
         }
-        
+
         // Find last match BEFORE current cursor position
-        let prev_match = self.modal_search_state.matches
+        let prev_match = self
+            .modal_search_state
+            .matches
             .iter()
             .rposition(|&idx| idx < self.filter_modal_state.selected_index);
-        
+
         if let Some(match_idx) = prev_match {
             self.modal_search_state.current_match_idx = match_idx;
         } else {
             // Wrap to last match
             self.modal_search_state.current_match_idx = self.modal_search_state.matches.len() - 1;
         }
-        
+
         let match_idx = self.modal_search_state.matches[self.modal_search_state.current_match_idx];
         self.filter_modal_state.selected_index = match_idx;
         self.ensure_modal_visible();
@@ -1902,15 +1921,19 @@ impl App {
 
     fn ensure_modal_visible(&mut self) {
         let visible_height = (self.last_visible_height * 70 / 100).saturating_sub(2);
-        
+
         if self.filter_modal_state.selected_index < self.filter_modal_state.scroll_offset {
             self.filter_modal_state.scroll_offset = self.filter_modal_state.selected_index;
-        } else if self.filter_modal_state.selected_index >= self.filter_modal_state.scroll_offset + visible_height {
-            self.filter_modal_state.scroll_offset = self.filter_modal_state.selected_index
-                .saturating_sub(visible_height) + 1;
+        } else if self.filter_modal_state.selected_index
+            >= self.filter_modal_state.scroll_offset + visible_height
+        {
+            self.filter_modal_state.scroll_offset = self
+                .filter_modal_state
+                .selected_index
+                .saturating_sub(visible_height)
+                + 1;
         }
     }
-
 
     fn resolve_current_backtrace(&mut self) {
         if self.selected_line >= self.display_lines.len() {
