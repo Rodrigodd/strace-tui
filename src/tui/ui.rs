@@ -455,7 +455,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_footer(f: &mut Frame, area: Rect) {
-    let footer = Paragraph::new("↑↓/jk: Navigate | PgUp/PgDn: Page | Ctrl+U/D: Half Page | Enter: Expand | x: Collapse | e/c: All | q: Quit | ?: Help")
+    let footer = Paragraph::new("↑↓/jk: Navigate | ←→: Collapse/Expand | PgUp/PgDn: Page | Ctrl+U/D: Half | Enter: Toggle | x: Collapse | e/c: All | q: Quit | ?: Help")
         .style(Style::default().fg(Color::DarkGray));
     f.render_widget(footer, area);
 }
@@ -475,7 +475,9 @@ fn draw_help(f: &mut Frame) {
         Line::from("  End/G       Jump to last item"),
         Line::from(""),
         Line::from(Span::styled("Actions:", Style::default().add_modifier(Modifier::UNDERLINED))),
-        Line::from("  Enter/Space Expand syscall or toggle backtrace"),
+        Line::from("  Enter/Space Toggle expansion"),
+        Line::from("  ←           Collapse deepest fold"),
+        Line::from("  →           Expand current item"),
         Line::from("  x/Backspace Collapse current item"),
         Line::from("  e           Expand all syscalls"),
         Line::from("  c           Collapse all items"),

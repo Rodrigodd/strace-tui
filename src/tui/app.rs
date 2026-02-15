@@ -52,6 +52,7 @@ pub struct App {
     pub expanded_arguments: HashSet<usize>,
     pub expanded_backtraces: HashSet<usize>,
     pub last_visible_height: usize, // Track for page scrolling
+    pub last_collapsed_position: Option<usize>, // Remember position before collapse for right arrow
     
     // Flags
     pub should_quit: bool,
@@ -79,6 +80,7 @@ impl App {
             expanded_arguments: HashSet::new(),
             expanded_backtraces: HashSet::new(),
             last_visible_height: 20, // Default, will be updated on first draw
+            last_collapsed_position: None,
             should_quit: false,
             show_help: false,
         };
@@ -221,6 +223,12 @@ impl App {
             KeyCode::Enter | KeyCode::Char(' ') => {
                 self.toggle_current_line();
             }
+            KeyCode::Left => {
+                self.collapse_deepest();
+            }
+            KeyCode::Right => {
+                self.expand_current();
+            }
             KeyCode::Backspace | KeyCode::Char('x') => {
                 self.collapse_current();
             }
@@ -242,12 +250,14 @@ impl App {
     }
 
     fn move_up(&mut self) {
+        self.last_collapsed_position = None; // Clear memory on navigation
         if self.selected_line > 0 {
             self.selected_line -= 1;
         }
     }
 
     fn move_down(&mut self) {
+        self.last_collapsed_position = None; // Clear memory on navigation
         if self.selected_line + 1 < self.display_lines.len() {
             self.selected_line += 1;
         }
@@ -341,6 +351,142 @@ impl App {
             }
             _ => {
                 // For other line types, do nothing on Enter
+            }
+        }
+    }
+
+    fn expand_current(&mut self) {
+        if self.selected_line >= self.display_lines.len() {
+            return;
+        }
+        
+        let saved_position = self.last_collapsed_position;
+        
+        match &self.display_lines[self.selected_line] {
+            DisplayLine::SyscallHeader { entry_idx } => {
+                // Expand syscall if not already expanded
+                let idx = *entry_idx;
+                if !self.expanded_items.contains(&idx) {
+                    self.expanded_items.insert(idx);
+                    self.rebuild_display_lines();
+                    
+                    // Restore cursor position if we just collapsed this
+                    if let Some(saved_line) = saved_position {
+                        if saved_line < self.display_lines.len() {
+                            self.selected_line = saved_line;
+                        }
+                    }
+                }
+            }
+            DisplayLine::ArgumentsHeader { entry_idx } => {
+                // Expand arguments if not already expanded
+                let idx = *entry_idx;
+                if !self.expanded_arguments.contains(&idx) {
+                    self.expanded_arguments.insert(idx);
+                    self.rebuild_display_lines();
+                    
+                    // Restore cursor position if we just collapsed this
+                    if let Some(saved_line) = saved_position {
+                        if saved_line < self.display_lines.len() {
+                            self.selected_line = saved_line;
+                        }
+                    }
+                }
+            }
+            DisplayLine::BacktraceHeader { entry_idx } => {
+                // Expand backtrace if not already expanded
+                let idx = *entry_idx;
+                if !self.expanded_backtraces.contains(&idx) {
+                    self.expanded_backtraces.insert(idx);
+                    // Resolve on-demand
+                    if let Some(entry) = self.entries.get_mut(idx) {
+                        if !entry.backtrace.is_empty() {
+                            let _ = self.resolver.resolve_frames(&mut entry.backtrace);
+                        }
+                    }
+                    self.rebuild_display_lines();
+                    
+                    // Restore cursor position if we just collapsed this
+                    if let Some(saved_line) = saved_position {
+                        if saved_line < self.display_lines.len() {
+                            self.selected_line = saved_line;
+                        }
+                    }
+                }
+            }
+            _ => {
+                // For other line types, do nothing
+            }
+        }
+        
+        // Clear the saved position after using it
+        self.last_collapsed_position = None;
+    }
+
+    fn collapse_deepest(&mut self) {
+        if self.selected_line >= self.display_lines.len() {
+            return;
+        }
+        
+        // Save current position before collapsing
+        self.last_collapsed_position = Some(self.selected_line);
+        
+        // Collapse the deepest surrounding fold based on current line type
+        match &self.display_lines[self.selected_line] {
+            DisplayLine::ArgumentLine { entry_idx, .. } => {
+                // In an argument line -> collapse arguments
+                let idx = *entry_idx;
+                self.expanded_arguments.remove(&idx);
+                self.rebuild_display_lines();
+                
+                // Move cursor to ArgumentsHeader
+                self.selected_line = self.display_lines.iter()
+                    .position(|line| matches!(line, DisplayLine::ArgumentsHeader { entry_idx: i } if *i == idx))
+                    .unwrap_or(self.selected_line);
+            }
+            DisplayLine::BacktraceFrame { entry_idx, .. } 
+            | DisplayLine::BacktraceResolved { entry_idx, .. } => {
+                // In a backtrace frame -> collapse backtrace
+                let idx = *entry_idx;
+                self.expanded_backtraces.remove(&idx);
+                self.rebuild_display_lines();
+                
+                // Move cursor to BacktraceHeader
+                self.selected_line = self.display_lines.iter()
+                    .position(|line| matches!(line, DisplayLine::BacktraceHeader { entry_idx: i } if *i == idx))
+                    .unwrap_or(self.selected_line);
+            }
+            DisplayLine::ArgumentsHeader { entry_idx } => {
+                // On arguments header -> collapse arguments
+                let idx = *entry_idx;
+                self.expanded_arguments.remove(&idx);
+                self.rebuild_display_lines();
+                // Already on header, no need to move
+            }
+            DisplayLine::BacktraceHeader { entry_idx } => {
+                // On backtrace header -> collapse backtrace
+                let idx = *entry_idx;
+                self.expanded_backtraces.remove(&idx);
+                self.rebuild_display_lines();
+                // Already on header, no need to move
+            }
+            DisplayLine::SyscallHeader { entry_idx } 
+            | DisplayLine::ReturnValue { entry_idx }
+            | DisplayLine::Error { entry_idx }
+            | DisplayLine::Duration { entry_idx }
+            | DisplayLine::Signal { entry_idx }
+            | DisplayLine::Exit { entry_idx } => {
+                // On syscall header or other top-level items -> collapse entire syscall
+                let idx = *entry_idx;
+                self.expanded_items.remove(&idx);
+                self.expanded_arguments.remove(&idx);
+                self.expanded_backtraces.remove(&idx);
+                self.rebuild_display_lines();
+                
+                // Move cursor to SyscallHeader
+                self.selected_line = self.display_lines.iter()
+                    .position(|line| matches!(line, DisplayLine::SyscallHeader { entry_idx: i } if *i == idx))
+                    .unwrap_or(self.selected_line);
             }
         }
     }
