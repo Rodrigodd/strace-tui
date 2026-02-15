@@ -131,6 +131,83 @@ fn test_parse_no_pid_format() {
 }
 
 #[test]
+fn test_parse_no_timestamp_format() {
+    // Test parsing strace output without timestamps (strace without -t or -tt)
+    let sample = r#"execve("/usr/bin/echo", ["echo", "test"], 0x7fff /* 42 vars */) = 0
+brk(NULL) = 0x55772af19000
+access("/etc/ld.so.preload", R_OK) = -1 ENOENT (No such file or directory)
+openat(AT_FDCWD, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 3
+close(3) = 0
+write(1, "test\n", 5) = 5
++++ exited with 0 +++
+"#;
+
+    let mut temp_file = NamedTempFile::new().unwrap();
+    temp_file.write_all(sample.as_bytes()).unwrap();
+    let temp_path = temp_file.path().to_str().unwrap();
+
+    let mut parser = StraceParser::new();
+    let entries = parser.parse_file(temp_path).unwrap();
+
+    assert!(entries.len() >= 6, "Should parse at least 6 entries");
+
+    // All entries should have PID 0 and empty timestamp
+    for entry in &entries {
+        assert_eq!(entry.pid, 0, "Entries without PID should have PID 0");
+        assert_eq!(entry.timestamp, "", "Entries without timestamp should have empty timestamp");
+    }
+
+    // Check first syscall
+    assert_eq!(entries[0].syscall_name, "execve");
+    assert_eq!(entries[0].return_value, Some("0".to_string()));
+
+    // Check syscall with error
+    let access_entry = entries.iter().find(|e| e.syscall_name == "access");
+    assert!(access_entry.is_some());
+    assert!(access_entry.unwrap().errno.is_some());
+
+    // Check exit entry
+    let exit_entry = entries.iter().find(|e| e.exit_info.is_some());
+    assert!(exit_entry.is_some());
+    assert_eq!(exit_entry.unwrap().exit_info.as_ref().unwrap().code, 0);
+}
+
+#[test]
+fn test_parse_pid_no_timestamp_format() {
+    // Test parsing strace output with PIDs but without timestamps (strace -f without -t)
+    let sample = r#"172330 execve("/usr/bin/sh", ["sh", "-c", "echo test"], 0x7ffe /* 42 vars */) = 0
+172330 brk(NULL) = 0x55d5ceb93000
+172330 access("/etc/ld.so.preload", R_OK) = -1 ENOENT (No such file or directory)
+172330 write(1, "test\n", 5) = 5
+172330 +++ exited with 0 +++
+"#;
+
+    let mut temp_file = NamedTempFile::new().unwrap();
+    temp_file.write_all(sample.as_bytes()).unwrap();
+    let temp_path = temp_file.path().to_str().unwrap();
+
+    let mut parser = StraceParser::new();
+    let entries = parser.parse_file(temp_path).unwrap();
+
+    assert!(entries.len() >= 4, "Should parse at least 4 entries");
+
+    // All entries should have PID 172330 and empty timestamp
+    for entry in &entries {
+        assert_eq!(entry.pid, 172330, "Entries should have correct PID");
+        assert_eq!(entry.timestamp, "", "Entries without timestamp should have empty timestamp");
+    }
+
+    // Check first syscall
+    assert_eq!(entries[0].syscall_name, "execve");
+    assert_eq!(entries[0].return_value, Some("0".to_string()));
+
+    // Check syscall with error
+    let access_entry = entries.iter().find(|e| e.syscall_name == "access");
+    assert!(access_entry.is_some());
+    assert!(access_entry.unwrap().errno.is_some());
+}
+
+#[test]
 fn test_cli_parse_subcommand() {
     use std::process::Command;
 
