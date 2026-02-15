@@ -311,46 +311,33 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
 
-            DisplayLine::ArgumentsHeader { entry_idx } => {
+            DisplayLine::ArgumentsHeader {
+                entry_idx,
+                tree_prefix,
+            } => {
                 let entry = &app.entries[*entry_idx];
                 let args_expanded = app.expanded_arguments.contains(entry_idx);
                 let args_arrow = if args_expanded { "▼" } else { "▶" };
                 let args = split_arguments(&entry.arguments);
-                let text = format!("  ├{} Arguments ({})", args_arrow, args.len());
+                let prefix_str = App::tree_prefix_to_string_header(tree_prefix);
+                let text = format!("{}{} Arguments ({})", prefix_str, args_arrow, args.len());
                 Line::from(Span::styled(
                     truncate_line(&text, width),
                     Style::default().fg(Color::Gray),
                 ))
             }
 
-            DisplayLine::ArgumentLine { entry_idx, arg_idx } => {
+            DisplayLine::ArgumentLine {
+                entry_idx,
+                arg_idx,
+                tree_prefix,
+            } => {
                 let entry = &app.entries[*entry_idx];
                 let args = split_arguments(&entry.arguments);
                 if let Some(arg) = args.get(*arg_idx) {
-                    let is_last_arg = *arg_idx == args.len() - 1;
-
-                    // Check if there are more items after arguments section
-                    let has_more_items = entry.return_value.is_some()
-                        || entry.errno.is_some()
-                        || entry.duration.is_some()
-                        || entry.signal.is_some()
-                        || entry.exit_info.is_some()
-                        || !entry.backtrace.is_empty();
-
-                    // Use ├─ if there are more items after arguments, even for last arg
-                    // Add vertical continuation line │ for non-last args when there are more items
-                    let (prefix, tree_char) = if has_more_items {
-                        if is_last_arg {
-                            ("  │   ", "└─")
-                        } else {
-                            ("  │   ", "├─")
-                        }
-                    } else {
-                        ("      ", if is_last_arg { "└─" } else { "├─" })
-                    };
-
-                    let max_len = width.saturating_sub(10); // "  │   └─ "
-                    let text = format!("{}{} {}", prefix, tree_char, truncate(arg, max_len));
+                    let prefix_str = App::tree_prefix_to_string(tree_prefix);
+                    let max_len = width.saturating_sub(prefix_str.len() + 1);
+                    let text = format!("{}{}", prefix_str, truncate(arg, max_len));
                     Line::from(Span::styled(
                         truncate_line(&text, width),
                         Style::default().fg(Color::DarkGray),
@@ -360,16 +347,22 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
 
-            DisplayLine::ReturnValue { entry_idx } => {
+            DisplayLine::ReturnValue {
+                entry_idx,
+                tree_prefix,
+            } => {
                 let entry = &app.entries[*entry_idx];
+                let prefix_str = App::tree_prefix_to_string(tree_prefix);
                 let ret_text = if entry.errno.is_some() {
                     format!(
-                        "  ├─ Return: {} (error)",
+                        "{}Return: {} (error)",
+                        prefix_str,
                         entry.return_value.as_deref().unwrap_or("?")
                     )
                 } else {
                     format!(
-                        "  ├─ Return: {}",
+                        "{}Return: {}",
+                        prefix_str,
                         entry.return_value.as_deref().unwrap_or("?")
                     )
                 };
@@ -384,10 +377,14 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 ))
             }
 
-            DisplayLine::Error { entry_idx } => {
+            DisplayLine::Error {
+                entry_idx,
+                tree_prefix,
+            } => {
                 let entry = &app.entries[*entry_idx];
                 if let Some(ref errno) = entry.errno {
-                    let text = format!("  ├─ Error: {} ({})", errno.code, errno.message);
+                    let prefix_str = App::tree_prefix_to_string(tree_prefix);
+                    let text = format!("{}Error: {} ({})", prefix_str, errno.code, errno.message);
                     Line::from(Span::styled(
                         truncate_line(&text, width),
                         Style::default().fg(Color::Red),
@@ -397,10 +394,14 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
 
-            DisplayLine::Duration { entry_idx } => {
+            DisplayLine::Duration {
+                entry_idx,
+                tree_prefix,
+            } => {
                 let entry = &app.entries[*entry_idx];
                 if let Some(dur) = entry.duration {
-                    let text = format!("  ├─ Duration: {:.6}s", dur);
+                    let prefix_str = App::tree_prefix_to_string(tree_prefix);
+                    let text = format!("{}Duration: {:.6}s", prefix_str, dur);
                     Line::from(Span::styled(
                         truncate_line(&text, width),
                         Style::default().fg(Color::Gray),
@@ -410,12 +411,17 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
 
-            DisplayLine::Signal { entry_idx } => {
+            DisplayLine::Signal {
+                entry_idx,
+                tree_prefix,
+            } => {
                 let entry = &app.entries[*entry_idx];
                 if let Some(ref signal) = entry.signal {
-                    let max_len = width.saturating_sub(15); // "  ├─ Signal: "
+                    let prefix_str = App::tree_prefix_to_string(tree_prefix);
+                    let max_len = width.saturating_sub(prefix_str.len() + 9); // "Signal: "
                     let text = format!(
-                        "  ├─ Signal: {} - {}",
+                        "{}Signal: {} - {}",
+                        prefix_str,
                         signal.signal_name,
                         truncate(&signal.details, max_len)
                     );
@@ -428,13 +434,17 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
 
-            DisplayLine::Exit { entry_idx } => {
+            DisplayLine::Exit {
+                entry_idx,
+                tree_prefix,
+            } => {
                 let entry = &app.entries[*entry_idx];
                 if let Some(ref exit) = entry.exit_info {
+                    let prefix_str = App::tree_prefix_to_string(tree_prefix);
                     let text = if exit.killed {
-                        format!("  └─ Killed with signal {}", exit.code)
+                        format!("{}Killed with signal {}", prefix_str, exit.code)
                     } else {
-                        format!("  └─ Exited with code {}", exit.code)
+                        format!("{}Exited with code {}", prefix_str, exit.code)
                     };
                     Line::from(Span::styled(
                         truncate_line(&text, width),
@@ -445,12 +455,17 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
 
-            DisplayLine::BacktraceHeader { entry_idx } => {
+            DisplayLine::BacktraceHeader {
+                entry_idx,
+                tree_prefix,
+            } => {
                 let entry = &app.entries[*entry_idx];
                 let bt_expanded = app.expanded_backtraces.contains(entry_idx);
                 let bt_arrow = if bt_expanded { "▼" } else { "▶" };
+                let prefix_str = App::tree_prefix_to_string_header(tree_prefix);
                 let text = format!(
-                    "  └{} Backtrace ({} frames)",
+                    "{}{} Backtrace ({} frames)",
+                    prefix_str,
                     bt_arrow,
                     entry.backtrace.len()
                 );
@@ -463,11 +478,11 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             DisplayLine::BacktraceFrame {
                 entry_idx,
                 frame_idx,
+                tree_prefix,
             } => {
                 let entry = &app.entries[*entry_idx];
                 let frame = &entry.backtrace[*frame_idx];
-                let is_last = *frame_idx == entry.backtrace.len() - 1;
-                let tree_char = if is_last { "└─" } else { "├─" };
+                let prefix_str = App::tree_prefix_to_string(tree_prefix);
 
                 let func = frame.function.as_deref().unwrap_or("");
                 let offset = frame.offset.as_deref().unwrap_or("");
@@ -479,10 +494,10 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     String::new()
                 };
 
-                let max_binary_len = width.saturating_sub(20); // Account for tree chars, spaces, etc.
+                let max_binary_len = width.saturating_sub(prefix_str.len() + 10);
                 let text = format!(
-                    "      {} {}{} [{}]",
-                    tree_char,
+                    "{}{}{} [{}]",
+                    prefix_str,
                     truncate(&frame.binary, max_binary_len),
                     func_info,
                     frame.address
@@ -496,17 +511,17 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             DisplayLine::BacktraceResolved {
                 entry_idx,
                 frame_idx,
+                tree_prefix,
             } => {
                 let entry = &app.entries[*entry_idx];
                 let frame = &entry.backtrace[*frame_idx];
                 if let Some(ref resolved) = frame.resolved {
-                    let is_last = *frame_idx == entry.backtrace.len() - 1;
-                    let tree_char = if is_last { "└─" } else { "├─" };
+                    let prefix_str = App::tree_prefix_to_string(tree_prefix);
 
-                    let max_file_len = width.saturating_sub(20); // Account for prefix and line number
+                    let max_file_len = width.saturating_sub(prefix_str.len() + 5);
                     let text = format!(
-                        "      {} {}:{}",
-                        tree_char,
+                        "{}{}:{}",
+                        prefix_str,
                         truncate_path_start(&resolved.file, max_file_len),
                         resolved.line
                     );
