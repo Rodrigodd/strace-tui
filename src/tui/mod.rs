@@ -12,7 +12,6 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use log::LevelFilter;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::fs::OpenOptions;
 use std::io;
@@ -22,20 +21,22 @@ pub fn run_tui(
     summary: crate::parser::SummaryStats,
     file_path: Option<String>,
 ) -> io::Result<()> {
-    // Initialize logging to file
-    let log_file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open("/tmp/strace-tui.log")
-        .expect("Failed to create log file");
+    // Initialize logging to file only if RUST_LOG is set
+    if std::env::var("RUST_LOG").is_ok() {
+        let log_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open("/tmp/strace-tui.log")
+            .expect("Failed to create log file");
 
-    env_logger::Builder::new()
-        .target(env_logger::Target::Pipe(Box::new(log_file)))
-        .filter_level(LevelFilter::Debug)
-        .init();
+        env_logger::Builder::new()
+            .target(env_logger::Target::Pipe(Box::new(log_file)))
+            .parse_default_env()
+            .init();
 
-    log::info!("Starting strace-tui");
+        log::info!("Starting strace-tui");
+    }
 
     // Setup terminal
     enable_raw_mode()?;
