@@ -622,6 +622,19 @@ fn draw_help(f: &mut Frame) {
         Line::from("  .           Toggle show hidden (ghost mode)"),
         Line::from(""),
         Line::from(Span::styled(
+            "Filter Modal:",
+            Style::default().add_modifier(Modifier::UNDERLINED),
+        )),
+        Line::from("  ↑/↓/j/k     Navigate list"),
+        Line::from("  Space/Enter Toggle checkbox"),
+        Line::from("  a           Toggle all"),
+        Line::from("  PgUp/PgDn   Scroll full page"),
+        Line::from("  Ctrl+U/D    Scroll half page"),
+        Line::from("  Home/g      Jump to first"),
+        Line::from("  End/G       Jump to last"),
+        Line::from("  Esc/H/q     Close modal"),
+        Line::from(""),
+        Line::from(Span::styled(
             "Other:",
             Style::default().add_modifier(Modifier::UNDERLINED),
         )),
@@ -646,22 +659,29 @@ fn draw_help(f: &mut Frame) {
 
 fn draw_filter_modal(f: &mut Frame, app: &App) {
     let modal_state = &app.filter_modal_state;
+    let area = centered_rect(70, 70, f.area());
     
-    // Build list items with checkboxes
+    // Calculate visible window (account for borders)
+    let visible_height = area.height.saturating_sub(2) as usize; // -2 for borders
+    let total_items = modal_state.syscall_list.len();
+    
+    // Only render visible items
+    let start = modal_state.scroll_offset;
+    let end = (start + visible_height).min(total_items);
+    
+    // Build list items with checkboxes for visible range
     let items: Vec<ListItem> = modal_state
         .syscall_list
         .iter()
         .enumerate()
-        .map(|(idx, (name, count))| {
+        .skip(start)
+        .take(end - start)
+        .map(|(_idx, (name, count))| {
             let is_hidden = app.hidden_syscalls.contains(name);
             let checkbox = if is_hidden { "[ ]" } else { "[✓]" };
             let text = format!("{} {} ({} calls)", checkbox, name, count);
             
-            let style = if idx == modal_state.selected_index {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
-            } else if is_hidden {
+            let style = if is_hidden {
                 Style::default().fg(Color::DarkGray)
             } else {
                 Style::default()
@@ -675,12 +695,22 @@ fn draw_filter_modal(f: &mut Frame, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Filter Syscalls (Space: Toggle | a: Toggle All | Esc: Close)")
+                .title("Filter Syscalls (Space: Toggle | a: Toggle All | q/Esc: Close)")
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD)
         );
     
-    let area = centered_rect(70, 70, f.area());
+    // Set up state for highlighting
+    let mut state = ratatui::widgets::ListState::default();
+    if modal_state.selected_index >= start && modal_state.selected_index < end {
+        state.select(Some(modal_state.selected_index - modal_state.scroll_offset));
+    }
+    
     f.render_widget(ratatui::widgets::Clear, area);
-    f.render_widget(list, area);
+    f.render_stateful_widget(list, area, &mut state);
 }
 
 fn truncate(s: &str, max_len: usize) -> String {

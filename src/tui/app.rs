@@ -1199,13 +1199,22 @@ impl App {
     }
 
     pub fn handle_filter_modal_event(&mut self, event: KeyEvent) {
+        // Get visible height for scroll calculations (estimate based on typical modal size)
+        // The modal takes 70% of screen height, minus 2 for borders
+        let visible_height = (self.last_visible_height * 70 / 100).saturating_sub(2);
+        
         match event.code {
-            KeyCode::Esc | KeyCode::Char('H') => {
+            KeyCode::Esc | KeyCode::Char('H') | KeyCode::Char('q') => {
                 self.close_filter_modal();
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.filter_modal_state.selected_index > 0 {
                     self.filter_modal_state.selected_index -= 1;
+                    
+                    // Adjust scroll if needed
+                    if self.filter_modal_state.selected_index < self.filter_modal_state.scroll_offset {
+                        self.filter_modal_state.scroll_offset = self.filter_modal_state.selected_index;
+                    }
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -1213,7 +1222,63 @@ impl App {
                     < self.filter_modal_state.syscall_list.len()
                 {
                     self.filter_modal_state.selected_index += 1;
+                    
+                    // Adjust scroll if needed
+                    let max_visible = self.filter_modal_state.scroll_offset + visible_height;
+                    if self.filter_modal_state.selected_index >= max_visible {
+                        self.filter_modal_state.scroll_offset = self.filter_modal_state.selected_index
+                            .saturating_sub(visible_height)
+                            + 1;
+                    }
                 }
+            }
+            KeyCode::PageUp => {
+                let scroll_amount = visible_height;
+                self.filter_modal_state.selected_index = 
+                    self.filter_modal_state.selected_index.saturating_sub(scroll_amount);
+                self.filter_modal_state.scroll_offset = 
+                    self.filter_modal_state.scroll_offset.saturating_sub(scroll_amount);
+            }
+            KeyCode::PageDown => {
+                let scroll_amount = visible_height;
+                let max_index = self.filter_modal_state.syscall_list.len().saturating_sub(1);
+                self.filter_modal_state.selected_index = 
+                    (self.filter_modal_state.selected_index + scroll_amount).min(max_index);
+                
+                let max_scroll = self.filter_modal_state.syscall_list.len()
+                    .saturating_sub(visible_height);
+                self.filter_modal_state.scroll_offset = 
+                    (self.filter_modal_state.scroll_offset + scroll_amount).min(max_scroll);
+            }
+            KeyCode::Char('u') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                let scroll_amount = visible_height / 2;
+                self.filter_modal_state.selected_index = 
+                    self.filter_modal_state.selected_index.saturating_sub(scroll_amount);
+                self.filter_modal_state.scroll_offset = 
+                    self.filter_modal_state.scroll_offset.saturating_sub(scroll_amount);
+            }
+            KeyCode::Char('d') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                let scroll_amount = visible_height / 2;
+                let max_index = self.filter_modal_state.syscall_list.len().saturating_sub(1);
+                self.filter_modal_state.selected_index = 
+                    (self.filter_modal_state.selected_index + scroll_amount).min(max_index);
+                
+                let max_scroll = self.filter_modal_state.syscall_list.len()
+                    .saturating_sub(visible_height);
+                self.filter_modal_state.scroll_offset = 
+                    (self.filter_modal_state.scroll_offset + scroll_amount).min(max_scroll);
+            }
+            KeyCode::Home | KeyCode::Char('g') => {
+                self.filter_modal_state.selected_index = 0;
+                self.filter_modal_state.scroll_offset = 0;
+            }
+            KeyCode::End | KeyCode::Char('G') => {
+                let max_index = self.filter_modal_state.syscall_list.len().saturating_sub(1);
+                self.filter_modal_state.selected_index = max_index;
+                
+                let max_scroll = self.filter_modal_state.syscall_list.len()
+                    .saturating_sub(visible_height);
+                self.filter_modal_state.scroll_offset = max_scroll;
             }
             KeyCode::Char(' ') | KeyCode::Enter => {
                 // Toggle the selected syscall
