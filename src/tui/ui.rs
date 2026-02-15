@@ -320,11 +320,11 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let args_arrow = if args_expanded { "▼" } else { "▶" };
                 let args = split_arguments(&entry.arguments);
                 let prefix_str = App::tree_prefix_to_string_header(tree_prefix);
-                let text = format!("{}{} Arguments ({})", prefix_str, args_arrow, args.len());
-                Line::from(Span::styled(
-                    truncate_line(&text, width),
-                    Style::default().fg(Color::Gray),
-                ))
+                let content = format!("{} Arguments ({})", args_arrow, args.len());
+                Line::from(vec![
+                    Span::styled(prefix_str, Style::default()),
+                    Span::styled(content, Style::default().fg(Color::Gray)),
+                ])
             }
 
             DisplayLine::ArgumentLine {
@@ -337,11 +337,11 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 if let Some(arg) = args.get(*arg_idx) {
                     let prefix_str = App::tree_prefix_to_string(tree_prefix);
                     let max_len = width.saturating_sub(prefix_str.len() + 1);
-                    let text = format!("{}{}", prefix_str, truncate(arg, max_len));
-                    Line::from(Span::styled(
-                        truncate_line(&text, width),
-                        Style::default().fg(Color::DarkGray),
-                    ))
+                    let content = truncate(arg, max_len);
+                    Line::from(vec![
+                        Span::styled(prefix_str, Style::default()),
+                        Span::styled(content, Style::default().fg(Color::DarkGray)),
+                    ])
                 } else {
                     continue;
                 }
@@ -353,16 +353,14 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             } => {
                 let entry = &app.entries[*entry_idx];
                 let prefix_str = App::tree_prefix_to_string(tree_prefix);
-                let ret_text = if entry.errno.is_some() {
+                let content = if entry.errno.is_some() {
                     format!(
-                        "{}Return: {} (error)",
-                        prefix_str,
+                        "Return: {} (error)",
                         entry.return_value.as_deref().unwrap_or("?")
                     )
                 } else {
                     format!(
-                        "{}Return: {}",
-                        prefix_str,
+                        "Return: {}",
                         entry.return_value.as_deref().unwrap_or("?")
                     )
                 };
@@ -371,10 +369,10 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 } else {
                     Color::Green
                 };
-                Line::from(Span::styled(
-                    truncate_line(&ret_text, width),
-                    Style::default().fg(ret_color),
-                ))
+                Line::from(vec![
+                    Span::styled(prefix_str, Style::default()),
+                    Span::styled(content, Style::default().fg(ret_color)),
+                ])
             }
 
             DisplayLine::Error {
@@ -384,11 +382,11 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let entry = &app.entries[*entry_idx];
                 if let Some(ref errno) = entry.errno {
                     let prefix_str = App::tree_prefix_to_string(tree_prefix);
-                    let text = format!("{}Error: {} ({})", prefix_str, errno.code, errno.message);
-                    Line::from(Span::styled(
-                        truncate_line(&text, width),
-                        Style::default().fg(Color::Red),
-                    ))
+                    let content = format!("Error: {} ({})", errno.code, errno.message);
+                    Line::from(vec![
+                        Span::styled(prefix_str, Style::default()),
+                        Span::styled(content, Style::default().fg(Color::Red)),
+                    ])
                 } else {
                     continue;
                 }
@@ -401,11 +399,11 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let entry = &app.entries[*entry_idx];
                 if let Some(dur) = entry.duration {
                     let prefix_str = App::tree_prefix_to_string(tree_prefix);
-                    let text = format!("{}Duration: {:.6}s", prefix_str, dur);
-                    Line::from(Span::styled(
-                        truncate_line(&text, width),
-                        Style::default().fg(Color::Gray),
-                    ))
+                    let content = format!("Duration: {:.6}s", dur);
+                    Line::from(vec![
+                        Span::styled(prefix_str, Style::default()),
+                        Span::styled(content, Style::default().fg(Color::Gray)),
+                    ])
                 } else {
                     continue;
                 }
@@ -419,16 +417,15 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 if let Some(ref signal) = entry.signal {
                     let prefix_str = App::tree_prefix_to_string(tree_prefix);
                     let max_len = width.saturating_sub(prefix_str.len() + 9); // "Signal: "
-                    let text = format!(
-                        "{}Signal: {} - {}",
-                        prefix_str,
+                    let content = format!(
+                        "Signal: {} - {}",
                         signal.signal_name,
                         truncate(&signal.details, max_len)
                     );
-                    Line::from(Span::styled(
-                        truncate_line(&text, width),
-                        Style::default().fg(Color::Yellow),
-                    ))
+                    Line::from(vec![
+                        Span::styled(prefix_str, Style::default()),
+                        Span::styled(content, Style::default().fg(Color::Yellow)),
+                    ])
                 } else {
                     continue;
                 }
@@ -441,15 +438,15 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let entry = &app.entries[*entry_idx];
                 if let Some(ref exit) = entry.exit_info {
                     let prefix_str = App::tree_prefix_to_string(tree_prefix);
-                    let text = if exit.killed {
-                        format!("{}Killed with signal {}", prefix_str, exit.code)
+                    let content = if exit.killed {
+                        format!("Killed with signal {}", exit.code)
                     } else {
-                        format!("{}Exited with code {}", prefix_str, exit.code)
+                        format!("Exited with code {}", exit.code)
                     };
-                    Line::from(Span::styled(
-                        truncate_line(&text, width),
-                        Style::default().fg(Color::Cyan),
-                    ))
+                    Line::from(vec![
+                        Span::styled(prefix_str, Style::default()),
+                        Span::styled(content, Style::default().fg(Color::Cyan)),
+                    ])
                 } else {
                     continue;
                 }
@@ -463,16 +460,15 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let bt_expanded = app.expanded_backtraces.contains(entry_idx);
                 let bt_arrow = if bt_expanded { "▼" } else { "▶" };
                 let prefix_str = App::tree_prefix_to_string_header(tree_prefix);
-                let text = format!(
-                    "{}{} Backtrace ({} frames)",
-                    prefix_str,
+                let content = format!(
+                    "{} Backtrace ({} frames)",
                     bt_arrow,
                     entry.backtrace.len()
                 );
-                Line::from(Span::styled(
-                    truncate_line(&text, width),
-                    Style::default().fg(Color::Magenta),
-                ))
+                Line::from(vec![
+                    Span::styled(prefix_str, Style::default()),
+                    Span::styled(content, Style::default().fg(Color::Magenta)),
+                ])
             }
 
             DisplayLine::BacktraceFrame {
@@ -495,17 +491,16 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 };
 
                 let max_binary_len = width.saturating_sub(prefix_str.len() + 10);
-                let text = format!(
-                    "{}{}{} [{}]",
-                    prefix_str,
+                let content = format!(
+                    "{}{} [{}]",
                     truncate(&frame.binary, max_binary_len),
                     func_info,
                     frame.address
                 );
-                Line::from(Span::styled(
-                    truncate_line(&text, width),
-                    Style::default().fg(Color::DarkGray),
-                ))
+                Line::from(vec![
+                    Span::styled(prefix_str, Style::default()),
+                    Span::styled(content, Style::default().fg(Color::DarkGray)),
+                ])
             }
 
             DisplayLine::BacktraceResolved {
@@ -519,16 +514,15 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     let prefix_str = App::tree_prefix_to_string(tree_prefix);
 
                     let max_file_len = width.saturating_sub(prefix_str.len() + 5);
-                    let text = format!(
-                        "{}{}:{}",
-                        prefix_str,
+                    let content = format!(
+                        "{}:{}",
                         truncate_path_start(&resolved.file, max_file_len),
                         resolved.line
                     );
-                    Line::from(Span::styled(
-                        truncate_line(&text, width),
-                        Style::default().fg(Color::Green),
-                    ))
+                    Line::from(vec![
+                        Span::styled(prefix_str, Style::default()),
+                        Span::styled(content, Style::default().fg(Color::Green)),
+                    ])
                 } else {
                     continue;
                 }
