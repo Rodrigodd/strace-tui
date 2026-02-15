@@ -1,8 +1,9 @@
-use std::fs::{File, OpenOptions};
+use std::fs::{File};
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
+use tempfile::NamedTempFile;
 
 fn main() {
     println!("=== Syscall Test Program ===");
@@ -26,31 +27,27 @@ fn test_file_io() {
     println!("Testing file I/O...");
 
     // write syscall
-    let mut file = File::create("/tmp/strace_test.txt").expect("Failed to create file");
-    file.write_all(b"Hello from strace test!\n")
+    let mut file1 = NamedTempFile::new().expect("Failed to create file");
+    file1.write_all(b"Hello from strace test!\n")
         .expect("Failed to write");
-    file.write_all(b"Second line of data.\n")
+    file1.write_all(b"Second line of data.\n")
         .expect("Failed to write second line");
-    drop(file);
-
-    // open, read, close syscalls
-    let mut file = File::open("/tmp/strace_test.txt").expect("Failed to open file");
+    file1.flush().expect("Failed to flush");
+    
+    // open, read, close syscalls - reopen the same temp file
+    let mut file = File::open(file1.path()).expect("Failed to open file");
     let mut contents = String::new();
     file.read_to_string(&mut contents).expect("Failed to read");
     println!("Read {} bytes", contents.len());
     drop(file);
+    
+    // Drop file1 after we're done reading
+    drop(file1);
 
     // Additional open with flags
-    let _file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open("/tmp/strace_test2.txt")
-        .expect("Failed to open with options");
+    let _file2 = NamedTempFile::new().expect("Failed to create temp file");
 
-    // unlink syscall
-    std::fs::remove_file("/tmp/strace_test.txt").ok();
-    std::fs::remove_file("/tmp/strace_test2.txt").ok();
+    // Files will be automatically cleaned up when dropped
 }
 
 fn test_process_ops() {

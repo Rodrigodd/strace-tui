@@ -2,8 +2,15 @@ use strace_tui::parser::StraceParser;
 
 fn main() {
     let mut parser = StraceParser::new();
+    
+    // Get trace file from command line or use default
+    let trace_file = std::env::args().nth(1)
+        .unwrap_or_else(|| {
+            eprintln!("Usage: test_parser <trace_file>");
+            std::process::exit(1);
+        });
 
-    match parser.parse_file("/tmp/strace_output.txt") {
+    match parser.parse_file(&trace_file) {
         Ok(entries) => {
             println!("Successfully parsed {} syscall entries", entries.len());
             println!("\nFirst 10 entries:");

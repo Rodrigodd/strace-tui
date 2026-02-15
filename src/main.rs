@@ -5,6 +5,7 @@ use clap::{Parser as ClapParser, Subcommand};
 use parser::{Addr2LineResolver, ParseErrorInfo, StraceOutput, StraceParser, SummaryStats};
 use std::collections::HashSet;
 use std::process::Command;
+use tempfile::NamedTempFile;
 
 #[derive(ClapParser)]
 #[command(name = "strace-tui")]
@@ -176,9 +177,17 @@ fn run_strace(command: Vec<String>, trace_file: Option<String>) -> String {
         std::process::exit(1);
     }
 
-    // Determine trace file path
-    let trace_path =
-        trace_file.unwrap_or_else(|| format!("/tmp/strace-tui-{}.txt", std::process::id()));
+    // Determine trace file path - use user-specified or create temp file
+    let trace_path = if let Some(path) = trace_file {
+        path
+    } else {
+        // Create a temp file with a meaningful name
+        let temp = NamedTempFile::with_prefix("strace-tui-")
+            .expect("Failed to create temp file");
+        // Keep the temp file around by persisting it
+        temp.keep().expect("Failed to persist temp file").1
+            .to_str().unwrap().to_string()
+    };
 
     eprintln!("Running strace on: {}", command.join(" "));
     eprintln!("Trace output: {}", trace_path);
