@@ -53,6 +53,7 @@ pub struct App {
     pub expanded_backtraces: HashSet<usize>,
     pub last_visible_height: usize, // Track for page scrolling
     pub last_collapsed_position: Option<usize>, // Remember position before collapse for right arrow
+    pub last_collapsed_scroll: Option<usize>, // Remember scroll_offset before collapse
     
     // Flags
     pub should_quit: bool,
@@ -81,6 +82,7 @@ impl App {
             expanded_backtraces: HashSet::new(),
             last_visible_height: 20, // Default, will be updated on first draw
             last_collapsed_position: None,
+            last_collapsed_scroll: None,
             should_quit: false,
             show_help: false,
         };
@@ -251,6 +253,7 @@ impl App {
 
     fn move_up(&mut self) {
         self.last_collapsed_position = None; // Clear memory on navigation
+        self.last_collapsed_scroll = None;
         if self.selected_line > 0 {
             self.selected_line -= 1;
         }
@@ -258,6 +261,7 @@ impl App {
 
     fn move_down(&mut self) {
         self.last_collapsed_position = None; // Clear memory on navigation
+        self.last_collapsed_scroll = None;
         if self.selected_line + 1 < self.display_lines.len() {
             self.selected_line += 1;
         }
@@ -306,6 +310,39 @@ impl App {
         }
     }
     
+    fn adjust_scroll_after_expansion(&mut self, header_line: usize) {
+        // Find the last line of the expanded item
+        let entry_idx = self.display_lines[header_line].entry_idx();
+        
+        // Find the last line that belongs to this entry
+        let last_line = self.display_lines.iter()
+            .enumerate()
+            .rev()
+            .find(|(_, line)| line.entry_idx() == entry_idx)
+            .map(|(idx, _)| idx)
+            .unwrap_or(header_line);
+        
+        // Check if last_line is below the bottom of the screen
+        let visible_bottom = self.scroll_offset + self.last_visible_height;
+        
+        if last_line + 1 > visible_bottom {
+            // Need to scroll down to show the entire expanded item
+            
+            // Calculate how much we need to scroll to show last_line with 2-line gap
+            let desired_bottom = last_line + 3; // last_line + 2 gap lines + 1 for indexing
+            let needed_scroll = desired_bottom.saturating_sub(self.last_visible_height);
+            
+            // But don't scroll so far that header_line goes above 2 lines from top
+            let max_scroll = header_line.saturating_sub(2);
+            
+            // Also respect the maximum possible scroll
+            let max_possible_scroll = self.display_lines.len().saturating_sub(self.last_visible_height);
+            
+            // Use the minimum of all constraints
+            self.scroll_offset = needed_scroll.min(max_scroll).min(max_possible_scroll);
+        }
+    }
+    
     fn toggle_current_line(&mut self) {
         if self.selected_line >= self.display_lines.len() {
             return;
@@ -319,7 +356,16 @@ impl App {
                     self.expanded_items.remove(&idx);
                     self.expanded_backtraces.remove(&idx);
                 } else {
+                    // Save scroll position before expanding
+                    self.last_collapsed_scroll = Some(self.scroll_offset);
+                    let header_line = self.selected_line;
+                    
                     self.expanded_items.insert(idx);
+                    self.rebuild_display_lines();
+                    
+                    // Adjust scroll to show entire expanded item
+                    self.adjust_scroll_after_expansion(header_line);
+                    return;
                 }
                 self.rebuild_display_lines();
             }
@@ -329,6 +375,10 @@ impl App {
                 if self.expanded_backtraces.contains(&idx) {
                     self.expanded_backtraces.remove(&idx);
                 } else {
+                    // Save scroll position before expanding
+                    self.last_collapsed_scroll = Some(self.scroll_offset);
+                    let header_line = self.selected_line;
+                    
                     self.expanded_backtraces.insert(idx);
                     // Resolve on-demand
                     if let Some(entry) = self.entries.get_mut(idx) {
@@ -336,6 +386,11 @@ impl App {
                             let _ = self.resolver.resolve_frames(&mut entry.backtrace);
                         }
                     }
+                    self.rebuild_display_lines();
+                    
+                    // Adjust scroll to show entire expanded item
+                    self.adjust_scroll_after_expansion(header_line);
+                    return;
                 }
                 self.rebuild_display_lines();
             }
@@ -345,7 +400,16 @@ impl App {
                 if self.expanded_arguments.contains(&idx) {
                     self.expanded_arguments.remove(&idx);
                 } else {
+                    // Save scroll position before expanding
+                    self.last_collapsed_scroll = Some(self.scroll_offset);
+                    let header_line = self.selected_line;
+                    
                     self.expanded_arguments.insert(idx);
+                    self.rebuild_display_lines();
+                    
+                    // Adjust scroll to show entire expanded item
+                    self.adjust_scroll_after_expansion(header_line);
+                    return;
                 }
                 self.rebuild_display_lines();
             }
@@ -361,12 +425,14 @@ impl App {
         }
         
         let saved_position = self.last_collapsed_position;
+        let saved_scroll = self.last_collapsed_scroll;
         
         match &self.display_lines[self.selected_line] {
             DisplayLine::SyscallHeader { entry_idx } => {
                 // Expand syscall if not already expanded
                 let idx = *entry_idx;
                 if !self.expanded_items.contains(&idx) {
+                    let header_line = self.selected_line;
                     self.expanded_items.insert(idx);
                     self.rebuild_display_lines();
                     
@@ -376,12 +442,20 @@ impl App {
                             self.selected_line = saved_line;
                         }
                     }
+                    
+                    // Restore or adjust scroll
+                    if let Some(saved) = saved_scroll {
+                        self.scroll_offset = saved;
+                    } else {
+                        self.adjust_scroll_after_expansion(header_line);
+                    }
                 }
             }
             DisplayLine::ArgumentsHeader { entry_idx } => {
                 // Expand arguments if not already expanded
                 let idx = *entry_idx;
                 if !self.expanded_arguments.contains(&idx) {
+                    let header_line = self.selected_line;
                     self.expanded_arguments.insert(idx);
                     self.rebuild_display_lines();
                     
@@ -391,12 +465,20 @@ impl App {
                             self.selected_line = saved_line;
                         }
                     }
+                    
+                    // Restore or adjust scroll
+                    if let Some(saved) = saved_scroll {
+                        self.scroll_offset = saved;
+                    } else {
+                        self.adjust_scroll_after_expansion(header_line);
+                    }
                 }
             }
             DisplayLine::BacktraceHeader { entry_idx } => {
                 // Expand backtrace if not already expanded
                 let idx = *entry_idx;
                 if !self.expanded_backtraces.contains(&idx) {
+                    let header_line = self.selected_line;
                     self.expanded_backtraces.insert(idx);
                     // Resolve on-demand
                     if let Some(entry) = self.entries.get_mut(idx) {
@@ -412,6 +494,13 @@ impl App {
                             self.selected_line = saved_line;
                         }
                     }
+                    
+                    // Restore or adjust scroll
+                    if let Some(saved) = saved_scroll {
+                        self.scroll_offset = saved;
+                    } else {
+                        self.adjust_scroll_after_expansion(header_line);
+                    }
                 }
             }
             _ => {
@@ -419,8 +508,9 @@ impl App {
             }
         }
         
-        // Clear the saved position after using it
+        // Clear the saved position and scroll after using it
         self.last_collapsed_position = None;
+        self.last_collapsed_scroll = None;
     }
 
     fn collapse_deepest(&mut self) {
@@ -428,8 +518,11 @@ impl App {
             return;
         }
         
-        // Save current position before collapsing
-        self.last_collapsed_position = Some(self.selected_line);
+        // Save current position for potential re-expansion with right arrow
+        let saved_position = Some(self.selected_line);
+        
+        // Get the saved scroll from before expansion (to restore it)
+        let scroll_to_restore = self.last_collapsed_scroll;
         
         // Collapse the deepest surrounding fold based on current line type
         match &self.display_lines[self.selected_line] {
@@ -489,6 +582,15 @@ impl App {
                     .unwrap_or(self.selected_line);
             }
         }
+        
+        // Restore the scroll position from before expansion
+        if let Some(scroll) = scroll_to_restore {
+            self.scroll_offset = scroll;
+        }
+        
+        // Save position for potential re-expansion with right arrow
+        self.last_collapsed_position = saved_position;
+        // Keep the scroll saved for re-expansion (don't change last_collapsed_scroll)
     }
 
     fn collapse_current(&mut self) {
