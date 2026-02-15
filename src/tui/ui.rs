@@ -8,11 +8,6 @@ use ratatui::{
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {
-    if app.show_help {
-        draw_help(f);
-        return;
-    }
-
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -38,6 +33,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     // Draw footer
     draw_footer(f, chunks[4]);
+
+    // Draw help modal on top if active
+    if app.show_help {
+        draw_help(f);
+    }
 }
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
