@@ -1,8 +1,8 @@
 mod app;
-mod ui;
 mod events;
-mod syscall_colors;
 mod process_graph;
+mod syscall_colors;
+mod ui;
 
 pub use app::App;
 use events::EventHandler;
@@ -10,15 +10,12 @@ use events::EventHandler;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{
-    backend::CrosstermBackend,
-    Terminal,
-};
-use std::io;
-use std::fs::OpenOptions;
 use log::LevelFilter;
+use ratatui::{Terminal, backend::CrosstermBackend};
+use std::fs::OpenOptions;
+use std::io;
 
 pub fn run_tui(
     entries: Vec<crate::parser::SyscallEntry>,
@@ -32,14 +29,14 @@ pub fn run_tui(
         .truncate(true)
         .open("/tmp/strace-tui.log")
         .expect("Failed to create log file");
-    
+
     env_logger::Builder::new()
         .target(env_logger::Target::Pipe(Box::new(log_file)))
         .filter_level(LevelFilter::Debug)
         .init();
-    
+
     log::info!("Starting strace-tui");
-    
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();

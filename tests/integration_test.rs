@@ -1,5 +1,5 @@
-use strace_tui::{StraceParser, Addr2LineResolver};
 use std::fs;
+use strace_tui::{Addr2LineResolver, StraceParser};
 
 #[test]
 fn test_parse_example_strace() {
@@ -11,34 +11,37 @@ fn test_parse_example_strace() {
 12345 10:20:33 --- SIGINT {si_signo=SIGINT, si_code=SI_USER, si_pid=123, si_uid=1000} ---
 12345 10:20:34 +++ exited with 0 +++
 "#;
-    
+
     let temp_file = "/tmp/test_strace.txt";
     fs::write(temp_file, sample).unwrap();
-    
+
     let mut parser = StraceParser::new();
     let entries = parser.parse_file(temp_file).unwrap();
-    
+
     assert!(entries.len() >= 4, "Should parse at least 4 entries");
-    
+
     // Check first entry
     assert_eq!(entries[0].pid, 12345);
     assert_eq!(entries[0].syscall_name, "write");
     assert_eq!(entries[0].return_value, Some("6".to_string()));
     assert_eq!(entries[0].backtrace.len(), 1);
-    assert_eq!(entries[0].backtrace[0].function, Some("__write".to_string()));
-    
+    assert_eq!(
+        entries[0].backtrace[0].function,
+        Some("__write".to_string())
+    );
+
     // Check signal entry
     let signal_entry = entries.iter().find(|e| e.signal.is_some());
     assert!(signal_entry.is_some());
     let signal = signal_entry.unwrap().signal.as_ref().unwrap();
     assert_eq!(signal.signal_name, "SIGINT");
-    
+
     // Check exit entry
     let exit_entry = entries.iter().find(|e| e.exit_info.is_some());
     assert!(exit_entry.is_some());
     let exit_info = exit_entry.unwrap().exit_info.as_ref().unwrap();
     assert_eq!(exit_info.code, 0);
-    
+
     fs::remove_file(temp_file).ok();
 }
 
@@ -48,25 +51,27 @@ fn test_unfinished_resumed() {
 12346 10:20:30 write(1, "x", 1) = 1
 12345 10:20:31 <... read resumed>, "data", 4) = 4
 "#;
-    
+
     let temp_file = "/tmp/test_unfinished.txt";
     fs::write(temp_file, sample).unwrap();
-    
+
     let mut parser = StraceParser::new();
     let entries = parser.parse_file(temp_file).unwrap();
-    
+
     // Should have merged unfinished+resumed into one entry
-    let read_entry = entries.iter().find(|e| e.syscall_name == "read" && !e.is_unfinished);
+    let read_entry = entries
+        .iter()
+        .find(|e| e.syscall_name == "read" && !e.is_unfinished);
     assert!(read_entry.is_some());
     assert_eq!(read_entry.unwrap().return_value, Some("4".to_string()));
-    
+
     fs::remove_file(temp_file).ok();
 }
 
 #[test]
 fn test_addr2line_resolver() {
     let mut resolver = Addr2LineResolver::new();
-    
+
     // Create a dummy frame
     let mut frame = strace_tui::BacktraceFrame {
         binary: "/bin/ls".to_string(),
@@ -75,89 +80,96 @@ fn test_addr2line_resolver() {
         address: "0x1234".to_string(),
         resolved: None,
     };
-    
+
     // Try to resolve - should not error even if it fails
     let result = resolver.resolve_frame(&mut frame);
     assert!(result.is_ok());
-    
+
     // Check caching works
     assert_eq!(resolver.cache_size(), 1);
 }
 
 #[test]
 fn test_cli_parse_subcommand() {
-    use std::process::Command;
     use std::fs;
-    
+    use std::process::Command;
+
     // Create a sample trace file
     let sample = r#"12345 10:20:30 write(1, "test\n", 5) = 5
  > /usr/lib/libc.so.6(__write+0x14) [0x10e53e]
 12345 10:20:31 close(1) = 0
 "#;
-    
+
     let temp_file = "/tmp/cli_test_trace.txt";
     fs::write(temp_file, sample).unwrap();
-    
+
     // Build first to ensure binary exists
     Command::new("cargo")
         .args(&["build", "--quiet"])
         .status()
         .expect("Failed to build");
-    
+
     // Run the parse subcommand using the built binary
     let output = Command::new("./target/debug/strace-tui")
         .args(&["parse", temp_file, "--json"])
         .output()
         .expect("Failed to run parse command");
-    
+
     assert!(output.status.success(), "parse command should succeed");
-    
+
     // Verify it's valid JSON
     let json_str = String::from_utf8_lossy(&output.stdout);
-    let parsed: serde_json::Value = serde_json::from_str(&json_str)
-        .expect("Output should be valid JSON");
-    
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json_str).expect("Output should be valid JSON");
+
     // Check it has the expected structure
     assert!(parsed["entries"].is_array());
     assert!(parsed["summary"].is_object());
-    
+
     fs::remove_file(temp_file).ok();
 }
 
 #[test]
 fn test_cli_trace_subcommand() {
     use std::process::Command;
-    
+
     // Build first to ensure binary exists
     Command::new("cargo")
         .args(&["build", "--quiet"])
         .status()
         .expect("Failed to build");
-    
+
     // Run the trace subcommand with output to file to avoid mixing traced program output with JSON
     let output = Command::new("./target/debug/strace-tui")
-        .args(&["trace", "--json", "--output", "/tmp/trace_test_output.json", "echo", "test"])
+        .args(&[
+            "trace",
+            "--json",
+            "--output",
+            "/tmp/trace_test_output.json",
+            "echo",
+            "test",
+        ])
         .output()
         .expect("Failed to run trace command");
-    
+
     // Command should succeed
     assert!(output.status.success(), "trace command should succeed");
-    
+
     // Read the output file
-    let json_str = std::fs::read_to_string("/tmp/trace_test_output.json")
-        .expect("Failed to read output file");
-    
-    let parsed: serde_json::Value = serde_json::from_str(&json_str)
-        .expect("Output should be valid JSON");
-    
+    let json_str =
+        std::fs::read_to_string("/tmp/trace_test_output.json").expect("Failed to read output file");
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json_str).expect("Output should be valid JSON");
+
     // Check it has the expected structure
     assert!(parsed["entries"].is_array());
     assert!(parsed["summary"].is_object());
-    
+
     // Should have some syscalls
     let syscall_count = parsed["summary"]["total_syscalls"].as_u64().unwrap();
     assert!(syscall_count > 0, "Should trace at least one syscall");
-    
+
     // Clean up
     std::fs::remove_file("/tmp/trace_test_output.json").ok();
 }

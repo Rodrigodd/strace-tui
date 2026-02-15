@@ -5,37 +5,37 @@ use serde::{Deserialize, Serialize};
 pub struct SyscallEntry {
     /// Process ID
     pub pid: u32,
-    
+
     /// Timestamp (HH:MM:SS format from strace -t)
     pub timestamp: String,
-    
+
     /// Syscall name
     pub syscall_name: String,
-    
+
     /// Raw argument string
     pub arguments: String,
-    
+
     /// Return value (if available)
     pub return_value: Option<String>,
-    
+
     /// Error number and message (if syscall failed)
     pub errno: Option<Errno>,
-    
+
     /// Duration in seconds (from <0.000123> format)
     pub duration: Option<f64>,
-    
+
     /// Stack backtrace frames (from -k flag)
     pub backtrace: Vec<BacktraceFrame>,
-    
+
     /// Whether this is an unfinished syscall
     pub is_unfinished: bool,
-    
+
     /// Whether this is a resumed syscall
     pub is_resumed: bool,
-    
+
     /// Signal information (if this line is a signal)
     pub signal: Option<SignalInfo>,
-    
+
     /// Exit information (if this is an exit line)
     pub exit_info: Option<ExitInfo>,
 }
@@ -45,7 +45,7 @@ pub struct SyscallEntry {
 pub struct Errno {
     /// Error code (e.g., "ENOENT")
     pub code: String,
-    
+
     /// Error message (e.g., "No such file or directory")
     pub message: String,
 }
@@ -55,16 +55,16 @@ pub struct Errno {
 pub struct BacktraceFrame {
     /// Binary/library path
     pub binary: String,
-    
+
     /// Function name (if available)
     pub function: Option<String>,
-    
+
     /// Offset within function (if available)
     pub offset: Option<String>,
-    
+
     /// Memory address
     pub address: String,
-    
+
     /// Resolved source location (if addr2line was used)
     pub resolved: Option<ResolvedLocation>,
 }
@@ -74,10 +74,10 @@ pub struct BacktraceFrame {
 pub struct ResolvedLocation {
     /// Source file path
     pub file: String,
-    
+
     /// Line number
     pub line: u32,
-    
+
     /// Column number (if available)
     pub column: Option<u32>,
 }
@@ -87,7 +87,7 @@ pub struct ResolvedLocation {
 pub struct SignalInfo {
     /// Signal name (e.g., "SIGCHLD")
     pub signal_name: String,
-    
+
     /// Raw signal details
     pub details: String,
 }
@@ -97,7 +97,7 @@ pub struct SignalInfo {
 pub struct ExitInfo {
     /// Exit code
     pub code: i32,
-    
+
     /// Whether it was killed by signal
     pub killed: bool,
 }
@@ -127,10 +127,10 @@ impl SyscallEntry {
 pub struct StraceOutput {
     /// All syscall entries
     pub entries: Vec<SyscallEntry>,
-    
+
     /// Summary statistics
     pub summary: SummaryStats,
-    
+
     /// Parse errors encountered
     pub errors: Vec<ParseErrorInfo>,
 }
@@ -140,16 +140,16 @@ pub struct StraceOutput {
 pub struct SummaryStats {
     /// Total number of syscalls
     pub total_syscalls: usize,
-    
+
     /// Number of failed syscalls
     pub failed_syscalls: usize,
-    
+
     /// Number of signals
     pub signals: usize,
-    
+
     /// Unique PIDs seen
     pub unique_pids: Vec<u32>,
-    
+
     /// Total duration (if available)
     pub total_duration: Option<f64>,
 }
@@ -159,7 +159,7 @@ pub struct SummaryStats {
 pub struct ParseErrorInfo {
     /// Line number where error occurred
     pub line_number: usize,
-    
+
     /// Error message
     pub message: String,
 }

@@ -1,32 +1,29 @@
-mod types;
-mod line_parser;
 mod backtrace_parser;
+mod line_parser;
 mod resolver;
+mod types;
 
-pub use types::*;
-pub use line_parser::parse_strace_line;
 pub use backtrace_parser::parse_backtrace_line;
+pub use line_parser::parse_strace_line;
 pub use resolver::Addr2LineResolver;
+pub use types::*;
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
 use std::fs::File;
+use std::io::{BufRead, BufReader};
 
 /// Parse errors that can occur during strace parsing
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ParseError {
     #[error("Invalid line format: {0}")]
     InvalidFormat(String),
-    
-    #[error("Missing timestamp")]
-    MissingTimestamp,
-    
+
     #[error("Invalid syscall format: {0}")]
     InvalidSyscall(String),
-    
+
     #[error("Failed to parse backtrace: {0}")]
     InvalidBacktrace(String),
-    
+
     #[error("IO error: {0}")]
     Io(String),
 }
@@ -53,16 +50,16 @@ impl StraceParser {
             line_number: 0,
         }
     }
-    
+
     /// Parse an entire strace output file
     pub fn parse_file(&mut self, path: &str) -> ParseResult<Vec<SyscallEntry>> {
         let file = File::open(path)
             .map_err(|e| ParseError::Io(format!("Failed to open {}: {}", path, e)))?;
-        
+
         let reader = BufReader::new(file);
         self.parse_lines(reader.lines().map(|l| l.unwrap_or_default()))
     }
-    
+
     /// Parse strace output from an iterator of lines
     pub fn parse_lines<I>(&mut self, lines: I) -> ParseResult<Vec<SyscallEntry>>
     where
@@ -70,15 +67,15 @@ impl StraceParser {
     {
         let mut entries = Vec::new();
         let mut current_entry: Option<SyscallEntry> = None;
-        
+
         for line in lines {
             self.line_number += 1;
-            
+
             // Skip empty lines
             if line.trim().is_empty() {
                 continue;
             }
-            
+
             // Check if this is a backtrace line (starts with " > ")
             if line.trim_start().starts_with(">") {
                 if let Some(ref mut entry) = current_entry {
@@ -89,12 +86,12 @@ impl StraceParser {
                 }
                 continue;
             }
-            
+
             // If we have a pending entry, finalize it
             if let Some(entry) = current_entry.take() {
                 entries.push(entry);
             }
-            
+
             // Parse the syscall line
             match parse_strace_line(&line) {
                 Ok(entry) => {
@@ -128,12 +125,12 @@ impl StraceParser {
                 }
             }
         }
-        
+
         // Don't forget the last entry
         if let Some(entry) = current_entry {
             entries.push(entry);
         }
-        
+
         Ok(entries)
     }
 }

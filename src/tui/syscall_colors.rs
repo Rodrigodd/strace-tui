@@ -5,10 +5,10 @@ pub fn syscall_category_color(name: &str) -> Color {
     match name {
         // File I/O - Blue
         "read" | "write" | "pread" | "pwrite" | "readv" | "writev" | "preadv" | "pwritev"
-        | "open" | "openat" | "openat2" | "creat" | "close" | "dup" | "dup2" | "dup3"
-        | "lseek" | "llseek" | "_llseek" | "fcntl" | "ioctl" | "fstat" | "stat" | "lstat"
-        | "fstatat" | "newfstatat" | "statx" | "ftruncate" | "truncate" | "fsync"
-        | "fdatasync" | "sync" | "syncfs" | "access" | "faccessat" | "faccessat2" => Color::Blue,
+        | "open" | "openat" | "openat2" | "creat" | "close" | "dup" | "dup2" | "dup3" | "lseek"
+        | "llseek" | "_llseek" | "fcntl" | "ioctl" | "fstat" | "stat" | "lstat" | "fstatat"
+        | "newfstatat" | "statx" | "ftruncate" | "truncate" | "fsync" | "fdatasync" | "sync"
+        | "syncfs" | "access" | "faccessat" | "faccessat2" => Color::Blue,
 
         // Process/Thread Control - Magenta
         "fork" | "vfork" | "clone" | "clone3" | "execve" | "execveat" | "exit" | "exit_group"
@@ -30,18 +30,16 @@ pub fn syscall_category_color(name: &str) -> Color {
 
         // Filesystem Operations - Yellow
         "mkdir" | "mkdirat" | "rmdir" | "unlink" | "unlinkat" | "rename" | "renameat"
-        | "renameat2" | "link" | "linkat" | "symlink" | "symlinkat" | "readlink"
-        | "readlinkat" | "chmod" | "fchmod" | "fchmodat" | "chown" | "fchown" | "lchown"
-        | "fchownat" | "chdir" | "fchdir" | "getcwd" | "mount" | "umount" | "umount2"
-        | "chroot" | "pivot_root" | "getdents" | "getdents64" | "statfs" | "fstatfs" => {
-            Color::Yellow
-        }
+        | "renameat2" | "link" | "linkat" | "symlink" | "symlinkat" | "readlink" | "readlinkat"
+        | "chmod" | "fchmod" | "fchmodat" | "chown" | "fchown" | "lchown" | "fchownat"
+        | "chdir" | "fchdir" | "getcwd" | "mount" | "umount" | "umount2" | "chroot"
+        | "pivot_root" | "getdents" | "getdents64" | "statfs" | "fstatfs" => Color::Yellow,
 
         // Time/Timers - LightBlue
         "gettimeofday" | "settimeofday" | "clock_gettime" | "clock_settime" | "clock_getres"
-        | "clock_nanosleep" | "time" | "stime" | "nanosleep" | "timer_create"
-        | "timer_settime" | "timer_gettime" | "timer_delete" | "timer_getoverrun" | "alarm"
-        | "setitimer" | "getitimer" => Color::LightBlue,
+        | "clock_nanosleep" | "time" | "stime" | "nanosleep" | "timer_create" | "timer_settime"
+        | "timer_gettime" | "timer_delete" | "timer_getoverrun" | "alarm" | "setitimer"
+        | "getitimer" => Color::LightBlue,
 
         // Signal Handling - LightRed
         "signal" | "sigaction" | "sigreturn" | "rt_sigaction" | "rt_sigreturn" | "sigprocmask"
