@@ -1232,20 +1232,79 @@ impl App {
         }
 
         let entry_idx = self.display_lines[self.selected_line].entry_idx();
-        if let Some(entry) = self.entries.get(entry_idx) {
-            let syscall_name = entry.syscall_name.clone();
-            if self.hidden_syscalls.contains(&syscall_name) {
-                self.hidden_syscalls.remove(&syscall_name);
-            } else {
-                self.hidden_syscalls.insert(syscall_name);
+        let syscall_name = self.entries[entry_idx].syscall_name.clone();
+        let was_hiding = !self.hidden_syscalls.contains(&syscall_name);
+        
+        // Save screen position (0 = top of screen, increases downward)
+        let screen_position = self.selected_line.saturating_sub(self.scroll_offset);
+        
+        // Toggle visibility
+        if self.hidden_syscalls.contains(&syscall_name) {
+            self.hidden_syscalls.remove(&syscall_name);
+        } else {
+            self.hidden_syscalls.insert(syscall_name);
+        }
+        
+        self.rebuild_display_lines();
+        
+        // If we're showing hidden items (ghost mode), the item is still visible
+        // Just keep cursor on it
+        if self.show_hidden {
+            if let Some(new_line) = self.display_lines.iter()
+                .position(|line| line.entry_idx() == entry_idx)
+            {
+                self.selected_line = new_line;
+                self.scroll_offset = new_line.saturating_sub(screen_position);
+                return;
             }
-            self.rebuild_display_lines();
-
-            // Adjust selection if current line is now hidden
+        }
+        
+        // If we just hid an item (and not in ghost mode), find next visible item
+        if was_hiding && !self.show_hidden {
+            // Try to find next non-hidden line starting from next entry
+            let next_line = self.find_next_visible_line_after(entry_idx);
+            
+            if let Some(line) = next_line {
+                self.selected_line = line;
+            } else {
+                // No visible line after, try from beginning
+                self.selected_line = self.find_first_visible_line().unwrap_or(0);
+            }
+            
+            // Preserve screen position: adjust scroll to keep cursor at same vertical position
+            self.scroll_offset = self.selected_line.saturating_sub(screen_position);
+            
+            // Clamp scroll_offset to valid range
+            let max_scroll = self.display_lines.len().saturating_sub(self.last_visible_height);
+            self.scroll_offset = self.scroll_offset.min(max_scroll);
+        } else {
+            // Just unhid something, keep cursor clamped
             if self.selected_line >= self.display_lines.len() && !self.display_lines.is_empty() {
                 self.selected_line = self.display_lines.len() - 1;
             }
         }
+    }
+
+    fn find_next_visible_line_after(&self, entry_idx: usize) -> Option<usize> {
+        // Find the first display line after entry_idx that belongs to a non-hidden entry
+        self.display_lines.iter()
+            .enumerate()
+            .find(|(_, line)| {
+                let idx = line.entry_idx();
+                idx > entry_idx && 
+                (self.show_hidden || !self.hidden_syscalls.contains(&self.entries[idx].syscall_name))
+            })
+            .map(|(i, _)| i)
+    }
+
+    fn find_first_visible_line(&self) -> Option<usize> {
+        self.display_lines.iter()
+            .enumerate()
+            .find(|(_, line)| {
+                let idx = line.entry_idx();
+                self.show_hidden || !self.hidden_syscalls.contains(&self.entries[idx].syscall_name)
+            })
+            .map(|(i, _)| i)
     }
 
     pub fn toggle_show_hidden(&mut self) {
