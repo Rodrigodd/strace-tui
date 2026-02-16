@@ -563,24 +563,8 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     let resolved = &resolved_frames[*resolved_idx];
                     let prefix_str = App::tree_prefix_to_string(tree_prefix);
                     
-                    let symbol = if resolved.is_inlined { "↪" } else { "→" };
-                    
-                    let location = if let Some(col) = resolved.column {
-                        format!("{}:{}:{}", resolved.file, resolved.line, col)
-                    } else {
-                        format!("{}:{}", resolved.file, resolved.line)
-                    };
-                    
-                    let max_len = width.saturating_sub(prefix_str.len() + 20);
-                    let inline_tag = if resolved.is_inlined { " (inlined)" } else { "" };
-                    
-                    let content = format!(
-                        "{} {} at {}{}",
-                        symbol,
-                        resolved.function,
-                        truncate_path_start(&location, max_len),
-                        inline_tag
-                    );
+                    // Use intelligent truncation
+                    let content = format_resolved_frame(resolved, prefix_str.len(), width);
                     
                     let style = if resolved.is_inlined {
                         Style::default().fg(Color::Cyan).add_modifier(Modifier::ITALIC)
@@ -925,22 +909,150 @@ fn truncate(s: &str, max_len: usize) -> String {
     }
 }
 
-fn truncate_path_start(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
-        return path.to_string();
+/// Truncate a string in the middle, keeping start and end
+fn truncate_middle(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s.to_string();
     }
-
-    // Truncate from the start, keeping the end (filename)
-    let chars: Vec<char> = path.chars().collect();
-    if chars.len() <= max_len {
-        return path.to_string();
+    
+    let ellipsis = "...";
+    if max_len <= ellipsis.len() {
+        return ellipsis[..max_len].to_string();
     }
-
-    let keep_chars = max_len.saturating_sub(3); // Reserve 3 for "..."
-    let skip_chars = chars.len() - keep_chars;
-    let truncated: String = chars.iter().skip(skip_chars).collect();
-    format!("...{}", truncated)
+    
+    let available = max_len - ellipsis.len();
+    let half = available / 2;
+    let end_start = s.len() - (available - half);
+    
+    format!("{}{}{}", &s[..half], ellipsis, &s[end_start..])
 }
+
+/// Intelligently truncate a file path with line:column, prioritizing filename visibility
+fn truncate_path_with_line(path: &str, line: u32, column: Option<u32>, max_len: usize) -> String {
+    use std::path::Path;
+    
+    // Build line info string
+    let line_info = if let Some(col) = column {
+        format!(":{}:{}", line, col)
+    } else {
+        format!(":{}", line)
+    };
+    
+    // Get just the filename
+    let filename = Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path);
+    
+    // Full string we want to display
+    let full = format!("{}{}", path, line_info);
+    
+    if full.len() <= max_len {
+        return full;
+    }
+    
+    // Minimum: filename + line info
+    let min_display = format!("{}{}", filename, line_info);
+    let min_len = min_display.len();
+    
+    if min_len >= max_len {
+        // Not even room for filename + line, truncate filename
+        if max_len > line_info.len() + 3 {
+            let file_budget = max_len - line_info.len() - 3;
+            return format!("{}...{}", &filename[..file_budget], line_info);
+        } else {
+            return truncate(&min_display, max_len);
+        }
+    }
+    
+    // We have room for path prefix + ".../" + filename + line
+    let available_for_prefix = max_len.saturating_sub(min_len + 4); // 4 for ".../
+    
+    if available_for_prefix == 0 {
+        return format!(".../{}{}", filename, line_info);
+    }
+    
+    // Show start of path + ... + filename
+    format!("{}.../{}{}", &path[..available_for_prefix], filename, line_info)
+}
+
+/// Format a resolved frame with intelligent truncation
+fn format_resolved_frame(
+    resolved: &crate::parser::ResolvedFrame,
+    prefix_len: usize,
+    width: usize,
+) -> String {
+    let symbol = if resolved.is_inlined { "↪" } else { "→" };
+    let inline_tag = if resolved.is_inlined { " (inlined)" } else { "" };
+    
+    // Calculate available width after prefix, symbol, " at ", and tag
+    let overhead = prefix_len + 2 + 4 + inline_tag.len(); // "↪ " + " at " + tag
+    let available = width.saturating_sub(overhead);
+    
+    if available < 20 {
+        // Too narrow, just show minimal
+        return format!("{} <truncated>", symbol);
+    }
+    
+    // Build full location string
+    let location = if let Some(col) = resolved.column {
+        format!("{}:{}:{}", resolved.file, resolved.line, col)
+    } else {
+        format!("{}:{}", resolved.file, resolved.line)
+    };
+    
+    let function_len = resolved.function.len();
+    let location_len = location.len();
+    let total_needed = function_len + location_len;
+    
+    if total_needed <= available {
+        // Fits without truncation
+        return format!(
+            "{} {} at {}{}",
+            symbol, resolved.function, location, inline_tag
+        );
+    }
+    
+    // Need to truncate - split available space intelligently
+    // Give 60% to function, 40% to location (but ensure both have minimums)
+    let min_function = 20;
+    let min_location = 15;
+    
+    let preferred_function = (available * 60 / 100).max(min_function);
+    let preferred_location = (available * 40 / 100).max(min_location);
+    
+    let (function_budget, location_budget) = if preferred_function + preferred_location > available {
+        // Can't fit both preferences, scale down
+        let total_pref = preferred_function + preferred_location;
+        let scale = available as f64 / total_pref as f64;
+        (
+            (preferred_function as f64 * scale) as usize,
+            (preferred_location as f64 * scale) as usize,
+        )
+    } else {
+        (preferred_function, preferred_location)
+    };
+    
+    // Truncate function name if needed
+    let function_display = if function_len > function_budget {
+        truncate_middle(&resolved.function, function_budget)
+    } else {
+        resolved.function.clone()
+    };
+    
+    // Truncate location intelligently
+    let location_display = if location_len > location_budget {
+        truncate_path_with_line(&resolved.file, resolved.line, resolved.column, location_budget)
+    } else {
+        location.clone()
+    };
+    
+    format!(
+        "{} {} at {}{}",
+        symbol, function_display, location_display, inline_tag
+    )
+}
+
 
 fn truncate_line(s: &str, width: usize) -> String {
     if width == 0 {
