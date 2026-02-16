@@ -82,7 +82,7 @@ impl Addr2LineResolver {
         match loader.find_frames(address) {
             Ok(mut frames_iter) => {
                 let mut resolved_frames = Vec::new();
-                
+
                 // Collect all frames
                 loop {
                     match frames_iter.next() {
@@ -92,7 +92,7 @@ impl Addr2LineResolver {
                                 if location.file == Some("??") {
                                     continue;
                                 }
-                                
+
                                 // Get function name (demangle it)
                                 let function_name = if let Some(func) = &frame.function {
                                     match func.demangle() {
@@ -102,11 +102,11 @@ impl Addr2LineResolver {
                                 } else {
                                     "<unknown>".to_string()
                                 };
-                                
+
                                 let file = location.file?.to_string();
                                 let line = location.line?;
                                 let column = location.column;
-                                
+
                                 resolved_frames.push(ResolvedFrame {
                                     function: function_name,
                                     file,
@@ -120,7 +120,7 @@ impl Addr2LineResolver {
                         Err(_) => break,
                     }
                 }
-                
+
                 // Mark all but the last as inlined
                 let len = resolved_frames.len();
                 if len > 1 {
@@ -128,7 +128,7 @@ impl Addr2LineResolver {
                         frame.is_inlined = true;
                     }
                 }
-                
+
                 if resolved_frames.is_empty() {
                     None
                 } else {

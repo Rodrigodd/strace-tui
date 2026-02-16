@@ -516,7 +516,7 @@ impl App {
 
                         // Collect all frames (flattened with resolved frames replacing raw)
                         let mut all_frames: Vec<(usize, Option<usize>)> = Vec::new();
-                        
+
                         for (frame_idx, frame) in entry.backtrace.iter().enumerate() {
                             if let Some(resolved_frames) = &frame.resolved {
                                 // Add all resolved frames (inlined + actual)
@@ -530,10 +530,13 @@ impl App {
                         }
 
                         // Create display lines
-                        for (idx_in_list, (frame_idx, resolved_idx_opt)) in all_frames.iter().enumerate() {
+                        for (idx_in_list, (frame_idx, resolved_idx_opt)) in
+                            all_frames.iter().enumerate()
+                        {
                             let is_last_in_list = idx_in_list == all_frames.len() - 1;
-                            let item_prefix = Self::build_tree_prefix(&nested_base, is_last_in_list);
-                            
+                            let item_prefix =
+                                Self::build_tree_prefix(&nested_base, is_last_in_list);
+
                             if let Some(resolved_idx) = resolved_idx_opt {
                                 self.display_lines.push(DisplayLine::BacktraceResolved {
                                     entry_idx: idx,
@@ -891,11 +894,8 @@ impl App {
                     && let Some(resolved_frames) = &frame.resolved
                     && let Some(resolved) = resolved_frames.get(*resolved_idx)
                 {
-                    self.pending_editor_open = Some((
-                        resolved.file.clone(),
-                        resolved.line,
-                        resolved.column,
-                    ));
+                    self.pending_editor_open =
+                        Some((resolved.file.clone(), resolved.line, resolved.column));
                 }
             }
             _ => {

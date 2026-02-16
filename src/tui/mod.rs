@@ -102,7 +102,7 @@ fn run_app<B: ratatui::backend::Backend + io::Write>(
                 DisableMouseCapture
             )?;
             terminal.show_cursor()?;
-            
+
             // Flush the terminal to ensure all commands are executed
             io::stdout().flush()?;
 
@@ -134,32 +134,32 @@ fn run_app<B: ratatui::backend::Backend + io::Write>(
 fn open_editor_foreground(file: &str, line: u32, column: Option<u32>) -> Result<(), String> {
     use std::env;
     use std::process::Command;
-    
+
     // Get editor from environment
     let editor_env = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-    
+
     // Parse editor command (may have multiple parts like "code --wait")
     let parts: Vec<&str> = editor_env.split_whitespace().collect();
     if parts.is_empty() {
         return Err("EDITOR is empty".to_string());
     }
-    
+
     let editor_cmd = parts[0];
     let editor_args: Vec<&str> = parts[1..].to_vec();
-    
+
     // Detect editor and build appropriate command
     let editor_name = std::path::Path::new(editor_cmd)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(editor_cmd);
-    
+
     let mut cmd = Command::new(editor_cmd);
-    
+
     // Add any existing args from EDITOR
     for arg in editor_args {
         cmd.arg(arg);
     }
-    
+
     // Add editor-specific line/column arguments
     match editor_name {
         "vim" | "vi" | "nvim" | "neovim" => {
@@ -250,22 +250,23 @@ fn open_editor_foreground(file: &str, line: u32, column: Option<u32>) -> Result<
             cmd.arg(file);
         }
     }
-    
+
     log::debug!("Opening editor: {:?}", cmd);
-    
+
     // Ensure the editor inherits stdin/stdout/stderr from the parent process
     // This is crucial for TUI editors (nano, vim, etc.) to work properly
     cmd.stdin(std::process::Stdio::inherit());
     cmd.stdout(std::process::Stdio::inherit());
     cmd.stderr(std::process::Stdio::inherit());
-    
+
     // Run the editor in foreground (blocking) - wait for it to finish
-    let status = cmd.status()
+    let status = cmd
+        .status()
         .map_err(|e| format!("Failed to run editor: {}", e))?;
-    
+
     if !status.success() {
         return Err(format!("Editor exited with status: {}", status));
     }
-    
+
     Ok(())
 }
