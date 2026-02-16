@@ -158,6 +158,7 @@ pub struct App {
     // Flags
     pub should_quit: bool,
     pub show_help: bool,
+    pub pending_editor_open: Option<(String, u32, Option<u32>)>, // (file, line, column)
 }
 
 impl App {
@@ -208,6 +209,7 @@ impl App {
             modal_search_state: SearchState::new(),
             should_quit: false,
             show_help: false,
+            pending_editor_open: None,
         };
         app.rebuild_display_lines();
         app
@@ -876,6 +878,25 @@ impl App {
                     return;
                 }
                 self.rebuild_display_lines();
+            }
+            DisplayLine::BacktraceResolved {
+                entry_idx,
+                frame_idx,
+                resolved_idx,
+                ..
+            } => {
+                // Set pending editor open - will be handled by main loop
+                let entry = &self.entries[*entry_idx];
+                if let Some(frame) = entry.backtrace.get(*frame_idx)
+                    && let Some(resolved_frames) = &frame.resolved
+                    && let Some(resolved) = resolved_frames.get(*resolved_idx)
+                {
+                    self.pending_editor_open = Some((
+                        resolved.file.clone(),
+                        resolved.line,
+                        resolved.column,
+                    ));
+                }
             }
             _ => {
                 // For other line types, do nothing on Enter

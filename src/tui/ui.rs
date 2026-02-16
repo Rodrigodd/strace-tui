@@ -724,6 +724,7 @@ fn draw_help(f: &mut Frame) {
             Style::default().add_modifier(Modifier::UNDERLINED),
         )),
         Line::from("  Enter/Space Toggle expansion"),
+        Line::from("  Enter       Open file in editor (on resolved backtrace)"),
         Line::from("  ←           Collapse deepest fold"),
         Line::from("  →           Expand current item"),
         Line::from("  x/Backspace Collapse current item"),
