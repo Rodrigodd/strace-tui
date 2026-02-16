@@ -497,7 +497,19 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let bt_expanded = app.expanded_backtraces.contains(entry_idx);
                 let bt_arrow = if bt_expanded { "▼" } else { "▶" };
                 let prefix_str = App::tree_prefix_to_string_header(tree_prefix);
-                let content = format!("{} Backtrace ({} frames)", bt_arrow, entry.backtrace.len());
+                
+                // Count total addresses and total frames (may differ due to inlining)
+                let total_addresses = entry.backtrace.len();
+                let total_frames: usize = entry.backtrace.iter()
+                    .map(|f| f.resolved.as_ref().map(|r| r.len()).unwrap_or(1))
+                    .sum();
+                
+                let content = if total_frames > total_addresses {
+                    format!("{} Backtrace ({} addresses, {} frames)", bt_arrow, total_addresses, total_frames)
+                } else {
+                    format!("{} Backtrace ({} frames)", bt_arrow, total_frames)
+                };
+                
                 Line::from(vec![
                     Span::styled(prefix_str, Style::default()),
                     Span::styled(content, Style::default().fg(Color::Magenta)),
@@ -540,26 +552,49 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             DisplayLine::BacktraceResolved {
                 entry_idx,
                 frame_idx,
+                resolved_idx,
                 tree_prefix,
                 ..
             } => {
                 let entry = &app.entries[*entry_idx];
                 let frame = &entry.backtrace[*frame_idx];
-                if let Some(ref resolved) = frame.resolved {
+                
+                if let Some(resolved_frames) = &frame.resolved {
+                    let resolved = &resolved_frames[*resolved_idx];
                     let prefix_str = App::tree_prefix_to_string(tree_prefix);
-
-                    let max_file_len = width.saturating_sub(prefix_str.len() + 5);
+                    
+                    let symbol = if resolved.is_inlined { "↪" } else { "→" };
+                    
+                    let location = if let Some(col) = resolved.column {
+                        format!("{}:{}:{}", resolved.file, resolved.line, col)
+                    } else {
+                        format!("{}:{}", resolved.file, resolved.line)
+                    };
+                    
+                    let max_len = width.saturating_sub(prefix_str.len() + 20);
+                    let inline_tag = if resolved.is_inlined { " (inlined)" } else { "" };
+                    
                     let content = format!(
-                        "{}:{}",
-                        truncate_path_start(&resolved.file, max_file_len),
-                        resolved.line
+                        "{} {} at {}{}",
+                        symbol,
+                        resolved.function,
+                        truncate_path_start(&location, max_len),
+                        inline_tag
                     );
+                    
+                    let style = if resolved.is_inlined {
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::ITALIC)
+                    } else {
+                        Style::default().fg(Color::Green)
+                    };
+                    
                     Line::from(vec![
                         Span::styled(prefix_str, Style::default()),
-                        Span::styled(content, Style::default().fg(Color::Green)),
+                        Span::styled(content, style),
                     ])
                 } else {
-                    continue;
+                    // Shouldn't happen, but fallback
+                    Line::from(Span::styled("  <invalid>", Style::default().fg(Color::Red)))
                 }
             }
         };

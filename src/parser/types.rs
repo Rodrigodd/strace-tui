@@ -65,13 +65,16 @@ pub struct BacktraceFrame {
     /// Memory address
     pub address: String,
 
-    /// Resolved source location (if addr2line was used)
-    pub resolved: Option<ResolvedLocation>,
+    /// Resolved source locations (can be multiple due to inlining)
+    pub resolved: Option<Vec<ResolvedFrame>>,
 }
 
-/// Source code location resolved from an address
+/// A resolved frame (can be inlined)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResolvedLocation {
+pub struct ResolvedFrame {
+    /// Function name (demangled)
+    pub function: String,
+
     /// Source file path
     pub file: String,
 
@@ -80,6 +83,9 @@ pub struct ResolvedLocation {
 
     /// Column number (if available)
     pub column: Option<u32>,
+
+    /// True if this frame is inlined (all but the last frame)
+    pub is_inlined: bool,
 }
 
 /// Signal delivery information

@@ -1,4 +1,4 @@
-use super::{BacktraceFrame, ParseResult, ResolvedLocation};
+use super::{BacktraceFrame, ParseResult, ResolvedFrame};
 use std::collections::HashMap;
 
 /// Resolver for converting addresses to source locations using addr2line
@@ -6,7 +6,7 @@ pub struct Addr2LineResolver {
     /// Cache of loaders per binary path
     loaders: HashMap<String, addr2line::Loader>,
     /// Cache of resolved addresses to avoid redundant lookups
-    cache: HashMap<String, Option<ResolvedLocation>>,
+    cache: HashMap<String, Option<Vec<ResolvedFrame>>>,
 }
 
 impl Addr2LineResolver {
@@ -68,8 +68,8 @@ impl Addr2LineResolver {
         }
     }
 
-    /// Resolve an address using addr2line crate
-    fn resolve_address(&mut self, binary: &str, address_str: &str) -> Option<ResolvedLocation> {
+    /// Resolve an address using addr2line crate with find_frames
+    fn resolve_address(&mut self, binary: &str, address_str: &str) -> Option<Vec<ResolvedFrame>> {
         log::debug!("Resolving address {} in binary {}", address_str, binary);
         // Get or create loader for this binary
         let loader = self.get_loader(binary)?;
@@ -78,21 +78,65 @@ impl Addr2LineResolver {
         let address_str = address_str.strip_prefix("0x").unwrap_or(address_str);
         let address = u64::from_str_radix(address_str, 16).ok()?;
 
-        // Find location
-        if let Ok(Some(location)) = loader.find_location(address) {
-            // Skip if file is unknown
-            if location.file == Some("??") {
-                return None;
+        // Find frames (can be multiple due to inlining)
+        match loader.find_frames(address) {
+            Ok(mut frames_iter) => {
+                let mut resolved_frames = Vec::new();
+                
+                // Collect all frames
+                loop {
+                    match frames_iter.next() {
+                        Ok(Some(frame)) => {
+                            // Skip if file is unknown
+                            if let Some(location) = &frame.location {
+                                if location.file == Some("??") {
+                                    continue;
+                                }
+                                
+                                // Get function name (demangle it)
+                                let function_name = if let Some(func) = &frame.function {
+                                    match func.demangle() {
+                                        Ok(name) => name.to_string(),
+                                        Err(_) => "<unknown>".to_string(),
+                                    }
+                                } else {
+                                    "<unknown>".to_string()
+                                };
+                                
+                                let file = location.file?.to_string();
+                                let line = location.line?;
+                                let column = location.column;
+                                
+                                resolved_frames.push(ResolvedFrame {
+                                    function: function_name,
+                                    file,
+                                    line,
+                                    column,
+                                    is_inlined: false, // Will be set after collecting all
+                                });
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(_) => break,
+                    }
+                }
+                
+                // Mark all but the last as inlined
+                let len = resolved_frames.len();
+                if len > 1 {
+                    for frame in resolved_frames.iter_mut().take(len - 1) {
+                        frame.is_inlined = true;
+                    }
+                }
+                
+                if resolved_frames.is_empty() {
+                    None
+                } else {
+                    Some(resolved_frames)
+                }
             }
-
-            return Some(ResolvedLocation {
-                file: location.file?.to_string(),
-                line: location.line?,
-                column: location.column,
-            });
+            Err(_) => None,
         }
-
-        None
     }
 }
 

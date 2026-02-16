@@ -74,6 +74,7 @@ pub enum DisplayLine {
     BacktraceResolved {
         entry_idx: usize,
         frame_idx: usize,
+        resolved_idx: usize,
         tree_prefix: TreePrefix,
         is_search_match: bool,
     },
@@ -511,22 +512,39 @@ impl App {
                     if self.expanded_backtraces.contains(&idx) {
                         let nested_base = Self::build_nested_prefix(&prefix, is_last);
 
+                        // Collect all frames (flattened with resolved frames replacing raw)
+                        let mut all_frames: Vec<(usize, Option<usize>)> = Vec::new();
+                        
                         for (frame_idx, frame) in entry.backtrace.iter().enumerate() {
-                            let is_last_frame = frame_idx == entry.backtrace.len() - 1;
-                            let frame_prefix = Self::build_tree_prefix(&nested_base, is_last_frame);
+                            if let Some(resolved_frames) = &frame.resolved {
+                                // Add all resolved frames (inlined + actual)
+                                for resolved_idx in 0..resolved_frames.len() {
+                                    all_frames.push((frame_idx, Some(resolved_idx)));
+                                }
+                            } else {
+                                // Add raw unresolved frame
+                                all_frames.push((frame_idx, None));
+                            }
+                        }
 
-                            if frame.resolved.is_none() {
-                                self.display_lines.push(DisplayLine::BacktraceFrame {
+                        // Create display lines
+                        for (idx_in_list, (frame_idx, resolved_idx_opt)) in all_frames.iter().enumerate() {
+                            let is_last_in_list = idx_in_list == all_frames.len() - 1;
+                            let item_prefix = Self::build_tree_prefix(&nested_base, is_last_in_list);
+                            
+                            if let Some(resolved_idx) = resolved_idx_opt {
+                                self.display_lines.push(DisplayLine::BacktraceResolved {
                                     entry_idx: idx,
-                                    frame_idx,
-                                    tree_prefix: frame_prefix,
+                                    frame_idx: *frame_idx,
+                                    resolved_idx: *resolved_idx,
+                                    tree_prefix: item_prefix,
                                     is_search_match: false,
                                 });
                             } else {
-                                self.display_lines.push(DisplayLine::BacktraceResolved {
+                                self.display_lines.push(DisplayLine::BacktraceFrame {
                                     entry_idx: idx,
-                                    frame_idx,
-                                    tree_prefix: frame_prefix,
+                                    frame_idx: *frame_idx,
+                                    tree_prefix: item_prefix,
                                     is_search_match: false,
                                 });
                             }
@@ -1571,14 +1589,19 @@ impl App {
             DisplayLine::BacktraceResolved {
                 entry_idx,
                 frame_idx,
+                resolved_idx,
                 ..
             } => {
                 let entry = &self.entries[*entry_idx];
                 if let Some(frame) = entry.backtrace.get(*frame_idx) {
-                    if let Some(resolved) = &frame.resolved {
-                        format!("{} {}:{}", frame.binary, resolved.file, resolved.line)
+                    if let Some(resolved_frames) = &frame.resolved {
+                        if let Some(resolved) = resolved_frames.get(*resolved_idx) {
+                            format!("{} {}:{}", resolved.function, resolved.file, resolved.line)
+                        } else {
+                            String::new()
+                        }
                     } else {
-                        format!("{} {}", frame.binary, frame.address)
+                        String::new()
                     }
                 } else {
                     String::new()
