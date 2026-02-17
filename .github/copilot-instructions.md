@@ -289,23 +289,6 @@ cargo run -- parse trace.txt
 cargo run -- parse trace.txt --json | jq '.summary'
 ```
 
-## Known Issues & Limitations
-
-1. **Duration parsing**: Not yet implemented (always returns `null`)
-2. **Dead code**: `ParseError::MissingTimestamp` never constructed
-3. **System libraries**: Often lack debug symbols, addr2line returns `??`
-4. **Large traces**: 10k+ syscalls may be slow in TUI
-5. **Terminal size**: TUI requires minimum 80x24 terminal
-
-## Future Enhancements
-
-- [ ] Implement duration parsing
-- [ ] Add filtering/search in TUI
-- [ ] Process tree visualization
-- [ ] Real-time mode (live strace integration)
-- [ ] Performance profiling view
-- [ ] Export filtered results
-
 ## Dependencies
 
 ```toml
