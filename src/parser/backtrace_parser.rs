@@ -1,9 +1,9 @@
 use nom::{
-    IResult,
+    IResult, Parser,
     bytes::complete::{tag, take_until, take_while1},
     character::complete::{char, space0},
     combinator::recognize,
-    sequence::{delimited, tuple},
+    sequence::delimited,
 };
 
 use super::{BacktraceFrame, ParseError, ParseResult};
@@ -64,7 +64,7 @@ fn parse_frame(input: &str) -> IResult<&str, BacktraceFrame> {
 
 /// Parse function name and offset: (function+0x14) or (function) or (+0x14)
 fn parse_function_info(input: &str) -> IResult<&str, (String, Option<String>)> {
-    let (rest, content) = delimited(char('('), take_until(")"), char(')'))(input)?;
+    let (rest, content) = delimited(char('('), take_until(")"), char(')')).parse(input)?;
 
     // Check if there's a + for offset
     if let Some(plus_pos) = content.find('+') {
@@ -88,12 +88,10 @@ fn parse_address(input: &str) -> IResult<&str, String> {
     let (rest, _) = space0(input)?;
     let (rest, addr) = delimited(
         char('['),
-        recognize(tuple((
-            tag("0x"),
-            take_while1(|c: char| c.is_ascii_hexdigit()),
-        ))),
+        recognize((tag("0x"), take_while1(|c: char| c.is_ascii_hexdigit()))),
         char(']'),
-    )(rest)?;
+    )
+    .parse(rest)?;
 
     Ok((rest, addr.to_string()))
 }

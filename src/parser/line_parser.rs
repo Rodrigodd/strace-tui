@@ -1,10 +1,10 @@
 use nom::{
-    IResult,
+    IResult, Parser,
     branch::alt,
     bytes::complete::{tag, take_while1},
     character::complete::{char, digit1, space0, space1},
     combinator::{opt, recognize},
-    sequence::{delimited, preceded, terminated, tuple},
+    sequence::{delimited, preceded, terminated},
 };
 
 use super::{Errno, ExitInfo, ParseError, ParseResult, SignalInfo, SyscallEntry};
@@ -71,22 +71,22 @@ pub fn parse_strace_line(line: &str) -> ParseResult<SyscallEntry> {
 
 /// Parse PID and timestamp from the start of the line
 fn parse_pid_and_timestamp(input: &str) -> IResult<&str, (u32, String)> {
-    let (rest, pid) = terminated(digit1, space1)(input)?;
-    let (rest, timestamp) = terminated(parse_timestamp, space1)(rest)?;
+    let (rest, pid) = terminated(digit1, space1).parse(input)?;
+    let (rest, timestamp) = terminated(parse_timestamp, space1).parse(rest)?;
 
     Ok((rest, (pid.parse().unwrap_or(0), timestamp.to_string())))
 }
 
 /// Parse timestamp only (no PID) - for strace without -f but with -t
 fn parse_timestamp_only(input: &str) -> IResult<&str, (u32, String)> {
-    let (rest, timestamp) = terminated(parse_timestamp, space1)(input)?;
+    let (rest, timestamp) = terminated(parse_timestamp, space1).parse(input)?;
     // Use PID 0 when no PID is present
     Ok((rest, (0, timestamp.to_string())))
 }
 
 /// Parse PID only (no timestamp) - for strace with -f but without -t
 fn parse_pid_only(input: &str) -> IResult<&str, (u32, String)> {
-    let (rest, pid) = terminated(digit1, space1)(input)?;
+    let (rest, pid) = terminated(digit1, space1).parse(input)?;
     // Use empty string for timestamp when no timestamp is present
     Ok((rest, (pid.parse().unwrap_or(0), String::new())))
 }
@@ -99,14 +99,15 @@ fn parse_no_prefix(input: &str) -> IResult<&str, (u32, String)> {
 
 /// Parse timestamp in HH:MM:SS format
 fn parse_timestamp(input: &str) -> IResult<&str, &str> {
-    recognize(tuple((
+    recognize((
         digit1,
         char(':'),
         digit1,
         char(':'),
         digit1,
-        opt(tuple((char('.'), digit1))),
-    )))(input)
+        opt((char('.'), digit1)),
+    ))
+    .parse(input)
 }
 
 /// Parse syscall name
@@ -172,20 +173,18 @@ fn parse_return_value(input: &str) -> IResult<&str, Option<String>> {
     // Return value can be a hex number, regular number, ?, or NULL
     // Order matters! Try hex first, then numbers
     let (rest, value) = alt((
-        recognize(tuple((
-            tag("0x"),
-            take_while1(|c: char| c.is_ascii_hexdigit()),
-        ))),
-        recognize(tuple((opt(char('-')), digit1))),
-        recognize(tuple((
+        recognize((tag("0x"), take_while1(|c: char| c.is_ascii_hexdigit()))),
+        recognize((opt(char('-')), digit1)),
+        recognize((
             char('?'),
             opt(preceded(
                 char('+'),
                 take_while1(|c: char| c.is_alphanumeric() || c == '_'),
             )),
-        ))),
+        )),
         tag("NULL"),
-    ))(rest)?;
+    ))
+    .parse(rest)?;
 
     Ok((rest, Some(value.to_string())))
 }
@@ -217,9 +216,10 @@ fn parse_duration(input: &str) -> IResult<&str, f64> {
     let (rest, _) = space0(input)?;
     let (rest, duration_str) = delimited(
         char('<'),
-        recognize(tuple((opt(digit1), opt(tuple((char('.'), digit1)))))),
+        recognize((opt(digit1), opt((char('.'), digit1)))),
         char('>'),
-    )(rest)?;
+    )
+    .parse(rest)?;
 
     let duration = duration_str.parse().unwrap_or(0.0);
     Ok((rest, duration))

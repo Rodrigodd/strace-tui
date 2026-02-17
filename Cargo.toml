@@ -12,7 +12,7 @@ name = "strace-tui"
 path = "src/main.rs"
 
 [dependencies]
-nom = "7.1"
+nom = "8.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 clap = { version = "4.5", features = ["derive"] }
