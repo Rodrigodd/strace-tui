@@ -144,8 +144,16 @@ impl ProcessGraph {
             .unwrap_or(Color::White)
     }
 
-    pub fn get_color_for_column(&self, column: usize) -> Color {
-        GRAPH_COLORS[column % GRAPH_COLORS.len()]
+    pub fn get_color_for_column(&self, column: usize, entry_idx: usize) -> Color {
+        self.processes
+            .values()
+            .find(|info| {
+                info.column == column
+                    && entry_idx >= info.first_entry_idx
+                    && entry_idx <= info.last_entry_idx
+            })
+            .map(|info| info.color)
+            .unwrap_or(GRAPH_COLORS[column % GRAPH_COLORS.len()])
     }
 
     pub fn render_graph_for_entry(
@@ -213,7 +221,7 @@ impl ProcessGraph {
 
         // Build graph with colored characters column by column
         for col in 0..self.max_columns {
-            let col_color = self.get_color_for_column(col);
+            let col_color = self.get_color_for_column(col, entry_idx);
             if let Some(child) = child_pid {
                 let child_column = self.processes.get(&child).map(|p| p.column).unwrap_or(0);
 
