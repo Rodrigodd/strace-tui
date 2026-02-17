@@ -42,15 +42,16 @@ impl ProcessGraph {
     pub fn build(entries: &[SyscallEntry]) -> Self {
         let mut processes: HashMap<u32, ProcessInfo> = HashMap::new();
         let mut pid_first_seen: HashMap<u32, usize> = HashMap::new();
-        let mut next_column = 0;
+        let mut pid_last_seen: HashMap<u32, usize> = HashMap::new();
         let mut fork_relationships: Vec<(usize, u32, u32)> = Vec::new(); // (entry_idx, parent_pid, child_pid)
 
-        // First pass: find all PIDs and fork relationships
+        // First pass: find all PIDs, their lifetimes, and fork relationships
         for (idx, entry) in entries.iter().enumerate() {
             let pid = entry.pid;
 
             // Track first and last appearance of each PID
             pid_first_seen.entry(pid).or_insert(idx);
+            pid_last_seen.insert(pid, idx);
 
             // Detect fork syscalls
             if Self::is_fork_syscall(&entry.syscall_name)
@@ -61,18 +62,44 @@ impl ProcessGraph {
                     && child_pid > 0
                 {
                     fork_relationships.push((idx, pid, child_pid));
+                    pid_first_seen.entry(child_pid).or_insert(idx);
+                    pid_last_seen.insert(child_pid, idx);
                 }
             }
         }
 
-        // Get unique PIDs in order of first appearance
-        let mut pids_ordered: Vec<(u32, usize)> = pid_first_seen.into_iter().collect();
-        pids_ordered.sort_by_key(|(_, first_idx)| *first_idx);
+        // Get all PIDs in order of first appearance, marking whether it's a start or end event
+        let mut pids_ordered: Vec<(u32, usize, bool)> = pid_first_seen
+            .into_iter()
+            .map(|(pid, idx)| (pid, idx, false))
+            .chain(pid_last_seen.iter().map(|(&pid, &idx)| (pid, idx, true)))
+            .collect();
+        pids_ordered.sort_by_key(|(_, first_idx, _)| *first_idx);
 
-        // Assign columns to PIDs
-        for (pid, first_idx) in pids_ordered {
-            let column = next_column;
-            next_column += 1;
+        // Second pass: Assign columns with reuse
+        let mut free_columns: Vec<usize> = Vec::new();
+        let mut max_columns = 0;
+
+        for (index, (pid, idx, end)) in pids_ordered.into_iter().enumerate() {
+            if end {
+                if let Some(info) = processes.get(&pid) {
+                    // Free the column for reuse
+                    free_columns.push(info.column);
+                }
+                continue;
+            }
+
+            // Sort free_columns to always reuse the smallest available column
+            free_columns.sort_unstable();
+
+            // Assign column: reuse if available, otherwise allocate new
+            let column = if !free_columns.is_empty() {
+                free_columns.remove(0) // Take smallest free column
+            } else {
+                let col = max_columns;
+                max_columns += 1;
+                col
+            };
 
             // Find parent if this was a fork child
             let parent_pid = fork_relationships
@@ -85,22 +112,14 @@ impl ProcessGraph {
                 ProcessInfo {
                     _pid: pid,
                     column,
-                    color: GRAPH_COLORS[column % GRAPH_COLORS.len()],
-                    first_entry_idx: first_idx,
-                    last_entry_idx: first_idx, // Will update in second pass
+                    color: GRAPH_COLORS[index % GRAPH_COLORS.len()],
+                    first_entry_idx: idx,
+                    last_entry_idx: pid_last_seen.get(&pid).cloned().unwrap_or(idx),
                     _parent_pid: parent_pid,
                 },
             );
         }
 
-        // Second pass: update last_entry_idx
-        for (idx, entry) in entries.iter().enumerate() {
-            if let Some(info) = processes.get_mut(&entry.pid) {
-                info.last_entry_idx = idx;
-            }
-        }
-
-        let max_columns = next_column;
         let enabled = max_columns > 1; // Hide graph if only one process
 
         ProcessGraph {
