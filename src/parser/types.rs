@@ -33,6 +33,14 @@ pub struct SyscallEntry {
     /// Whether this is a resumed syscall
     pub is_resumed: bool,
 
+    /// Index of related unfinished syscall (for resumed entries)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unfinished_entry_idx: Option<usize>,
+
+    /// Index of related resumed syscall (for unfinished entries)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resumed_entry_idx: Option<usize>,
+
     /// Signal information (if this line is a signal)
     pub signal: Option<SignalInfo>,
 
@@ -122,6 +130,8 @@ impl SyscallEntry {
             backtrace: Vec::new(),
             is_unfinished: false,
             is_resumed: false,
+            unfinished_entry_idx: None,
+            resumed_entry_idx: None,
             signal: None,
             exit_info: None,
         }
@@ -152,6 +162,9 @@ pub struct SummaryStats {
 
     /// Number of signals
     pub signals: usize,
+
+    /// Number of unfinished syscalls
+    pub unfinished: usize,
 
     /// Unique PIDs seen
     pub unique_pids: Vec<u32>,

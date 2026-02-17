@@ -18,7 +18,7 @@ fn test_parse_example_strace() {
     let temp_path = temp_file.path().to_str().unwrap();
 
     let mut parser = StraceParser::new();
-    let entries = parser.parse_file(temp_path).unwrap();
+    let entries = parser.parse_file(temp_path, false).unwrap();
 
     assert!(entries.len() >= 4, "Should parse at least 4 entries");
 
@@ -57,7 +57,7 @@ fn test_unfinished_resumed() {
     let temp_path = temp_file.path().to_str().unwrap();
 
     let mut parser = StraceParser::new();
-    let entries = parser.parse_file(temp_path).unwrap();
+    let entries = parser.parse_file(temp_path, false).unwrap();
 
     // Should have merged unfinished+resumed into one entry
     let read_entry = entries
@@ -105,7 +105,7 @@ fn test_parse_no_pid_format() {
     let temp_path = temp_file.path().to_str().unwrap();
 
     let mut parser = StraceParser::new();
-    let entries = parser.parse_file(temp_path).unwrap();
+    let entries = parser.parse_file(temp_path, false).unwrap();
 
     assert!(entries.len() >= 6, "Should parse at least 6 entries");
 
@@ -147,7 +147,7 @@ write(1, "test\n", 5) = 5
     let temp_path = temp_file.path().to_str().unwrap();
 
     let mut parser = StraceParser::new();
-    let entries = parser.parse_file(temp_path).unwrap();
+    let entries = parser.parse_file(temp_path, false).unwrap();
 
     assert!(entries.len() >= 6, "Should parse at least 6 entries");
 
@@ -190,7 +190,7 @@ fn test_parse_pid_no_timestamp_format() {
     let temp_path = temp_file.path().to_str().unwrap();
 
     let mut parser = StraceParser::new();
-    let entries = parser.parse_file(temp_path).unwrap();
+    let entries = parser.parse_file(temp_path, false).unwrap();
 
     assert!(entries.len() >= 4, "Should parse at least 4 entries");
 

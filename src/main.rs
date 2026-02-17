@@ -38,6 +38,10 @@ enum Commands {
         /// Pretty print JSON output (only with --json)
         #[arg(short, long)]
         pretty: bool,
+
+        /// Merge resumed syscalls into unfinished syscalls (old behavior)
+        #[arg(long)]
+        merge_resumed: bool,
     },
 
     /// Run strace on a command and parse the output
@@ -69,6 +73,10 @@ enum Commands {
         /// Path for strace output (default: temp file)
         #[arg(long, value_name = "FILE")]
         trace_file: Option<String>,
+
+        /// Merge resumed syscalls into unfinished syscalls (old behavior)
+        #[arg(long)]
+        merge_resumed: bool,
     },
 }
 
@@ -82,11 +90,12 @@ fn main() {
             output,
             resolve,
             pretty,
+            merge_resumed,
         } => {
             if json {
-                parse_file_json(&input, output, resolve, pretty);
+                parse_file_json(&input, output, resolve, pretty, merge_resumed);
             } else {
-                parse_file_tui(&input);
+                parse_file_tui(&input, merge_resumed);
             }
         }
         Commands::Trace {
@@ -97,13 +106,14 @@ fn main() {
             pretty,
             keep_trace,
             trace_file,
+            merge_resumed,
         } => {
             let trace_path = run_strace(command, trace_file);
 
             if json {
-                parse_file_json(&trace_path, output, resolve, pretty);
+                parse_file_json(&trace_path, output, resolve, pretty, merge_resumed);
             } else {
-                parse_file_tui(&trace_path);
+                parse_file_tui(&trace_path, merge_resumed);
             }
 
             // Clean up trace file unless keep_trace is set
@@ -116,10 +126,10 @@ fn main() {
     }
 }
 
-fn parse_file_tui(input: &str) {
+fn parse_file_tui(input: &str, merge_resumed: bool) {
     // Parse the strace output
     let mut parser = StraceParser::new();
-    let entries = match parser.parse_file(input) {
+    let entries = match parser.parse_file(input, merge_resumed) {
         Ok(e) => e,
         Err(err) => {
             eprintln!("Error parsing file: {}", err);
@@ -142,10 +152,16 @@ fn parse_file_tui(input: &str) {
     }
 }
 
-fn parse_file_json(input: &str, output: Option<String>, resolve: bool, pretty: bool) {
+fn parse_file_json(
+    input: &str,
+    output: Option<String>,
+    resolve: bool,
+    pretty: bool,
+    merge_resumed: bool,
+) {
     // Parse the strace output
     let mut parser = StraceParser::new();
-    let mut entries = match parser.parse_file(input) {
+    let mut entries = match parser.parse_file(input, merge_resumed) {
         Ok(e) => e,
         Err(err) => {
             eprintln!("Error parsing file: {}", err);
@@ -285,6 +301,7 @@ fn generate_summary(entries: &[parser::SyscallEntry]) -> SummaryStats {
     let mut unique_pids = HashSet::new();
     let mut failed = 0;
     let mut signals = 0;
+    let mut unfinished = 0;
     let mut total_duration = 0.0;
 
     for entry in entries {
@@ -298,6 +315,10 @@ fn generate_summary(entries: &[parser::SyscallEntry]) -> SummaryStats {
             signals += 1;
         }
 
+        if entry.is_unfinished {
+            unfinished += 1;
+        }
+
         if let Some(dur) = entry.duration {
             total_duration += dur;
         }
@@ -309,6 +330,7 @@ fn generate_summary(entries: &[parser::SyscallEntry]) -> SummaryStats {
         total_syscalls: entries.len(),
         failed_syscalls: failed,
         signals,
+        unfinished,
         unique_pids,
         total_duration: if total_duration > 0.0 {
             Some(total_duration)

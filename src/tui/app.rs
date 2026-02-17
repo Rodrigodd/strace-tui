@@ -60,6 +60,11 @@ pub enum DisplayLine {
         tree_prefix: TreePrefix,
         is_search_match: bool,
     },
+    EntryReference {
+        entry_idx: usize,
+        tree_prefix: TreePrefix,
+        is_search_match: bool,
+    },
     BacktraceHeader {
         entry_idx: usize,
         tree_prefix: TreePrefix,
@@ -91,6 +96,7 @@ impl DisplayLine {
             DisplayLine::Duration { entry_idx, .. } => *entry_idx,
             DisplayLine::Signal { entry_idx, .. } => *entry_idx,
             DisplayLine::Exit { entry_idx, .. } => *entry_idx,
+            DisplayLine::EntryReference { entry_idx, .. } => *entry_idx,
             DisplayLine::BacktraceHeader { entry_idx, .. } => *entry_idx,
             DisplayLine::BacktraceFrame { entry_idx, .. } => *entry_idx,
             DisplayLine::BacktraceResolved { entry_idx, .. } => *entry_idx,
@@ -331,6 +337,8 @@ impl App {
                 let has_duration = entry.duration.is_some();
                 let has_signal = entry.signal.is_some();
                 let has_exit = entry.exit_info.is_some();
+                let has_reference =
+                    entry.unfinished_entry_idx.is_some() || entry.resumed_entry_idx.is_some();
                 let has_backtrace = !entry.backtrace.is_empty();
 
                 let mut items = Vec::new();
@@ -351,6 +359,9 @@ impl App {
                 }
                 if has_exit {
                     items.push("exit");
+                }
+                if has_reference {
+                    items.push("reference");
                 }
                 if has_backtrace {
                     items.push("backtrace");
@@ -446,6 +457,18 @@ impl App {
                     let is_last = item_idx == total_items - 1;
                     let prefix = Self::build_tree_prefix(&base_prefix, is_last);
                     self.display_lines.push(DisplayLine::Exit {
+                        entry_idx: idx,
+                        tree_prefix: prefix,
+                        is_search_match: false,
+                    });
+                    item_idx += 1;
+                }
+
+                // Entry Reference (for unfinished/resumed links)
+                if has_reference {
+                    let is_last = item_idx == total_items - 1;
+                    let prefix = Self::build_tree_prefix(&base_prefix, is_last);
+                    self.display_lines.push(DisplayLine::EntryReference {
                         entry_idx: idx,
                         tree_prefix: prefix,
                         is_search_match: false,
@@ -1083,7 +1106,8 @@ impl App {
             | DisplayLine::Error { entry_idx, .. }
             | DisplayLine::Duration { entry_idx, .. }
             | DisplayLine::Signal { entry_idx, .. }
-            | DisplayLine::Exit { entry_idx, .. } => {
+            | DisplayLine::Exit { entry_idx, .. }
+            | DisplayLine::EntryReference { entry_idx, .. } => {
                 // On syscall header or other top-level items -> collapse entire syscall
                 let idx = *entry_idx;
                 self.expanded_items.remove(&idx);
@@ -1499,6 +1523,16 @@ impl App {
                     String::new()
                 }
             }
+            DisplayLine::EntryReference { entry_idx, .. } => {
+                let entry = &self.entries[*entry_idx];
+                if let Some(unfinished_idx) = entry.unfinished_entry_idx {
+                    format!("Resumed from entry #{}", unfinished_idx + 1)
+                } else if let Some(resumed_idx) = entry.resumed_entry_idx {
+                    format!("See resumed in entry #{}", resumed_idx + 1)
+                } else {
+                    String::new()
+                }
+            }
             DisplayLine::BacktraceHeader { .. } => "Backtrace".to_string(),
             DisplayLine::BacktraceFrame {
                 entry_idx,
@@ -1576,6 +1610,9 @@ impl App {
                     DisplayLine::Exit {
                         is_search_match, ..
                     } => *is_search_match = false,
+                    DisplayLine::EntryReference {
+                        is_search_match, ..
+                    } => *is_search_match = false,
                     DisplayLine::BacktraceHeader {
                         is_search_match, ..
                     } => *is_search_match = false,
@@ -1625,6 +1662,9 @@ impl App {
                     is_search_match, ..
                 } => *is_search_match = is_match,
                 DisplayLine::Exit {
+                    is_search_match, ..
+                } => *is_search_match = is_match,
+                DisplayLine::EntryReference {
                     is_search_match, ..
                 } => *is_search_match = is_match,
                 DisplayLine::BacktraceHeader {

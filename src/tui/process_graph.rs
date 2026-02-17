@@ -151,23 +151,38 @@ impl ProcessGraph {
     pub fn render_graph_for_entry(
         &self,
         entry_idx: usize,
-        entry: &SyscallEntry,
+        entries: &[SyscallEntry],
     ) -> Vec<(char, Color)> {
         if !self.enabled {
             return Vec::new();
         }
 
+        let entry = match entries.get(entry_idx) {
+            Some(e) => e,
+            None => return Vec::new(),
+        };
+
         let pid = entry.pid;
         let mut graph = Vec::new();
 
         // Check if this is a fork
-        let is_fork = Self::is_fork_syscall(&entry.syscall_name);
+        let is_fork = Self::is_fork_syscall(&entry.syscall_name) && !entry.is_resumed;
         let child_pid = if is_fork {
-            entry
-                .return_value
-                .as_ref()
-                .and_then(|ret| ret.trim().parse::<u32>().ok())
-                .filter(|&child| child > 0)
+            if entry.is_unfinished {
+                entry.resumed_entry_idx.and_then(|resumed_idx| {
+                    entries
+                        .get(resumed_idx)
+                        .and_then(|resumed_entry| resumed_entry.return_value.as_ref())
+                        .and_then(|ret| ret.trim().parse::<u32>().ok())
+                        .filter(|&child| child > 0)
+                })
+            } else {
+                entry
+                    .return_value
+                    .as_ref()
+                    .and_then(|ret| ret.trim().parse::<u32>().ok())
+                    .filter(|&child| child > 0)
+            }
         } else {
             None
         };
@@ -175,7 +190,7 @@ impl ProcessGraph {
         // Check if this is a wait that completes
         let is_wait = Self::is_wait_syscall(&entry.syscall_name);
         // For wait, try return value first, then fall back to first argument (the PID waited for)
-        let waited_pid = if is_wait {
+        let waited_pid = if is_wait && !entry.is_unfinished {
             entry
                 .return_value
                 .as_ref()

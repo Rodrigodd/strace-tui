@@ -59,10 +59,11 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         .unwrap_or("strace");
 
     let header_text = format!(
-        "strace-tui: {} | Syscalls: {} | Failed: {} | PIDs: {} | Signals: {}",
+        "strace-tui: {} | Syscalls: {} | Failed: {} | Unfinished: {} | PIDs: {} | Signals: {}",
         file_name,
         app.summary.total_syscalls,
         app.summary.failed_syscalls,
+        app.summary.unfinished,
         app.summary.unique_pids.len(),
         app.summary.signals,
     );
@@ -82,6 +83,37 @@ fn draw_divider(f: &mut Frame, area: Rect) {
         .border_style(Style::default().fg(Color::DarkGray));
 
     f.render_widget(divider, area);
+}
+
+/// Split syscall name into spans, coloring "unfinished" and "resumed" keywords
+fn format_syscall_name_spans(
+    syscall_name: &str,
+    is_unfinished: bool,
+    is_resumed: bool,
+    syscall_color: Color,
+) -> Vec<Span<'_>> {
+    if is_unfinished {
+        // Color "unfinished" in yellow, rest in syscall_color
+        vec![
+            Span::styled(syscall_name.to_string(), Style::default().fg(syscall_color)),
+            Span::styled(" <unfinished>", Style::default().fg(Color::Yellow)),
+        ]
+    } else if is_resumed {
+        // Reconstruct format: <... syscall_name resumed>
+        // Color "resumed" in green
+        vec![
+            Span::styled("<... ", Style::default().fg(Color::DarkGray)),
+            Span::styled(syscall_name.to_string(), Style::default().fg(syscall_color)),
+            Span::styled(" ", Style::default().fg(Color::DarkGray)),
+            Span::styled("resumed", Style::default().fg(Color::Green)),
+            Span::styled(">", Style::default().fg(Color::DarkGray)),
+        ]
+    } else {
+        vec![Span::styled(
+            syscall_name.to_string(),
+            Style::default().fg(syscall_color),
+        )]
+    }
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
@@ -140,7 +172,9 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     };
 
                     // Get graph for this entry
-                    let graph_chars = app.process_graph.render_graph_for_entry(*entry_idx, entry);
+                    let graph_chars = app
+                        .process_graph
+                        .render_graph_for_entry(*entry_idx, &app.entries);
                     let has_graph = !graph_chars.is_empty();
                     let graph_len = if has_graph { graph_chars.len() + 4 } else { 0 }; // +4 for "  "+"  "
 
@@ -212,7 +246,9 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     let ret = entry.return_value.as_deref().unwrap_or("?");
 
                     // Get graph for this entry
-                    let graph_chars = app.process_graph.render_graph_for_entry(*entry_idx, entry);
+                    let graph_chars = app
+                        .process_graph
+                        .render_graph_for_entry(*entry_idx, &app.entries);
                     let has_graph = !graph_chars.is_empty();
                     let graph_len = if has_graph { graph_chars.len() + 4 } else { 0 }; // +4 for "  "+"  "
 
@@ -224,13 +260,6 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     let metadata_pid = format!("[{}]", entry.pid);
                     let metadata_time = format!(" {}", entry.timestamp);
 
-                    // Calculate lengths
-                    let arrow_len = arrow_str.chars().count();
-                    let syscall_len = syscall_name.chars().count();
-                    let args_ret_len = args_and_ret.chars().count();
-                    let metadata_len = metadata_pid.chars().count() + metadata_time.chars().count();
-                    let left_total = arrow_len + syscall_len + args_ret_len;
-
                     // Determine colors
                     let syscall_color =
                         base_color_override.unwrap_or_else(|| syscall_category_color(syscall_name));
@@ -240,21 +269,35 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                         Color::White
                     });
 
+                    // Get syscall name spans (handles unfinished/resumed coloring)
+                    let syscall_spans = format_syscall_name_spans(
+                        syscall_name,
+                        entry.is_unfinished,
+                        entry.is_resumed,
+                        syscall_color,
+                    );
+
+                    // Calculate lengths (sum up all syscall spans)
+                    let arrow_len = arrow_str.chars().count();
+                    let syscall_len: usize = syscall_spans
+                        .iter()
+                        .map(|s| s.content.chars().count())
+                        .sum();
+                    let args_ret_len = args_and_ret.chars().count();
+                    let metadata_len = metadata_pid.chars().count() + metadata_time.chars().count();
+                    let left_total = arrow_len + syscall_len + args_ret_len;
+
                     if left_total + graph_len + metadata_len <= width {
                         // Enough space - build with padding
                         let padding_len =
                             width.saturating_sub(left_total + graph_len + metadata_len);
                         let padding = " ".repeat(padding_len);
 
-                        let mut spans = vec![
-                            Span::styled(arrow_str, Style::default().fg(rest_color)),
-                            Span::styled(
-                                syscall_name.to_string(),
-                                Style::default().fg(syscall_color),
-                            ),
-                            Span::styled(args_and_ret, Style::default().fg(rest_color)),
-                            Span::styled(padding, Style::default()),
-                        ];
+                        let mut spans =
+                            vec![Span::styled(arrow_str, Style::default().fg(rest_color))];
+                        spans.extend(syscall_spans);
+                        spans.push(Span::styled(args_and_ret, Style::default().fg(rest_color)));
+                        spans.push(Span::styled(padding, Style::default()));
 
                         if has_graph {
                             spans.push(Span::raw("  "));
@@ -485,6 +528,28 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
 
+            DisplayLine::EntryReference {
+                entry_idx,
+                tree_prefix,
+                ..
+            } => {
+                let entry = &app.entries[*entry_idx];
+                let prefix_str = App::tree_prefix_to_string(tree_prefix);
+
+                let content = if let Some(unfinished_idx) = entry.unfinished_entry_idx {
+                    format!("Resumed from entry #{}", unfinished_idx + 1)
+                } else if let Some(resumed_idx) = entry.resumed_entry_idx {
+                    format!("See resumed in entry #{}", resumed_idx + 1)
+                } else {
+                    continue;
+                };
+
+                Line::from(vec![
+                    Span::styled(prefix_str, Style::default()),
+                    Span::styled(content, Style::default().fg(Color::DarkGray)),
+                ])
+            }
+
             DisplayLine::BacktraceHeader {
                 entry_idx,
                 tree_prefix,
@@ -611,6 +676,9 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 is_search_match, ..
             } => *is_search_match,
             DisplayLine::Exit {
+                is_search_match, ..
+            } => *is_search_match,
+            DisplayLine::EntryReference {
                 is_search_match, ..
             } => *is_search_match,
             DisplayLine::BacktraceHeader {

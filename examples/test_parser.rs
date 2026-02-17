@@ -9,7 +9,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    match parser.parse_file(&trace_file) {
+    match parser.parse_file(&trace_file, false) {
         Ok(entries) => {
             println!("Successfully parsed {} syscall entries", entries.len());
             println!("\nFirst 10 entries:");

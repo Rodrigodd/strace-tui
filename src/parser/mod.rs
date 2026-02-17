@@ -52,16 +52,24 @@ impl StraceParser {
     }
 
     /// Parse an entire strace output file
-    pub fn parse_file(&mut self, path: &str) -> ParseResult<Vec<SyscallEntry>> {
+    pub fn parse_file(
+        &mut self,
+        path: &str,
+        merge_resumed: bool,
+    ) -> ParseResult<Vec<SyscallEntry>> {
         let file = File::open(path)
             .map_err(|e| ParseError::Io(format!("Failed to open {}: {}", path, e)))?;
 
         let reader = BufReader::new(file);
-        self.parse_lines(reader.lines().map(|l| l.unwrap_or_default()))
+        self.parse_lines(reader.lines().map(|l| l.unwrap_or_default()), merge_resumed)
     }
 
     /// Parse strace output from an iterator of lines
-    pub fn parse_lines<I>(&mut self, lines: I) -> ParseResult<Vec<SyscallEntry>>
+    pub fn parse_lines<I>(
+        &mut self,
+        lines: I,
+        merge_resumed: bool,
+    ) -> ParseResult<Vec<SyscallEntry>>
     where
         I: Iterator<Item = String>,
     {
@@ -101,21 +109,39 @@ impl StraceParser {
                         self.unfinished.insert(entry.pid, entries.len());
                         current_entry = Some(entry);
                     } else if entry.is_resumed {
-                        // Complete previously unfinished syscall
-                        if let Some(unfinished) = self.unfinished.remove(&entry.pid) {
-                            let unfinished = entries.get_mut(unfinished).unwrap();
-                            unfinished.return_value = entry.return_value;
-                            unfinished.errno = entry.errno;
-                            unfinished.duration = entry.duration;
-                            unfinished.is_resumed = false;
-                            unfinished.is_unfinished = false;
+                        if merge_resumed {
+                            // OLD BEHAVIOR: Merge resumed into unfinished
+                            if let Some(unfinished_idx) = self.unfinished.remove(&entry.pid) {
+                                let unfinished = entries.get_mut(unfinished_idx).unwrap();
+                                unfinished.return_value = entry.return_value;
+                                unfinished.errno = entry.errno;
+                                unfinished.duration = entry.duration;
+                                unfinished.is_resumed = false;
+                                unfinished.is_unfinished = false;
+                            } else {
+                                // Resumed without unfinished - just store as-is with error
+                                self.errors.push((
+                                    self.line_number,
+                                    ParseError::InvalidFormat(
+                                        "resumed without unfinished".to_string(),
+                                    ),
+                                ));
+                                current_entry = Some(entry);
+                            }
                         } else {
-                            // Resumed without unfinished - just store as-is with error
-                            self.errors.push((
-                                self.line_number,
-                                ParseError::InvalidFormat("resumed without unfinished".to_string()),
-                            ));
-                            current_entry = Some(entry);
+                            // NEW BEHAVIOR: Keep separate, link them
+                            if let Some(unfinished_idx) = self.unfinished.remove(&entry.pid) {
+                                let mut resumed_entry = entry;
+                                resumed_entry.unfinished_entry_idx = Some(unfinished_idx);
+
+                                // Update unfinished entry with link to resumed
+                                entries[unfinished_idx].resumed_entry_idx = Some(entries.len());
+
+                                current_entry = Some(resumed_entry);
+                            } else {
+                                // Resumed without unfinished - just store as-is
+                                current_entry = Some(entry);
+                            }
                         }
                     } else {
                         current_entry = Some(entry);
