@@ -2,6 +2,8 @@
 
 A terminal user interface (TUI) for visualizing and exploring strace output.
 
+https://github.com/user-attachments/assets/a190090e-1e30-4692-9a20-5b2315cb7634
+
 ## Overview
 
 **Supported features:**
