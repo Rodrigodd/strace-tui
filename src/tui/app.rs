@@ -304,11 +304,12 @@ impl App {
 
     fn rebuild_display_lines(&mut self) {
         // Remember which entry we're looking at before rebuilding
-        let _current_entry_idx = if self.selected_line < self.display_lines.len() {
+        let current_entry_idx = if self.selected_line < self.display_lines.len() {
             Some(self.display_lines[self.selected_line].entry_idx())
         } else {
             None
         };
+        let cursor_screen_pos = self.selected_line.saturating_sub(self.scroll_offset);
 
         self.display_lines.clear();
 
@@ -544,6 +545,18 @@ impl App {
         // Update search matches if search is active (without moving cursor)
         if !self.search_state.matches.is_empty() {
             self.update_search_matches_internal(false);
+        }
+
+        // Restore cursor to the same entry
+        if let Some(entry_idx) = current_entry_idx {
+            self.selected_line = self
+                .display_lines
+                .iter()
+                .position(|line| line.entry_idx() >= entry_idx)
+                .unwrap_or(0);
+
+            // Restore cursor screen position
+            self.scroll_offset = self.selected_line.saturating_sub(cursor_screen_pos);
         }
     }
 
