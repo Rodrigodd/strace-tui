@@ -223,7 +223,11 @@ impl ProcessGraph {
                 let max_col = current_column.max(child_column);
 
                 if col == current_column {
-                    graph.push(('*', col_color));
+                    if entry.is_unfinished {
+                        graph.push(('○', col_color));
+                    } else {
+                        graph.push(('●', col_color));
+                    }
                 } else if col > min_col && col < max_col {
                     graph.push(('─', col_color));
                 } else if col == child_column {
@@ -242,7 +246,11 @@ impl ProcessGraph {
                 let max_col = current_column.max(waited_column);
 
                 if col == current_column {
-                    graph.push(('*', col_color));
+                    if entry.is_unfinished {
+                        graph.push(('○', col_color));
+                    } else {
+                        graph.push(('●', col_color));
+                    }
                 } else if col > min_col && col < max_col {
                     graph.push(('─', col_color));
                 } else if col == waited_column {
@@ -255,7 +263,11 @@ impl ProcessGraph {
             } else {
                 // Normal line: show active processes
                 if col == current_column {
-                    graph.push(('*', col_color));
+                    if entry.is_unfinished {
+                        graph.push(('○', col_color));
+                    } else {
+                        graph.push(('●', col_color));
+                    }
                 } else if self.is_active_at(col, entry_idx) {
                     graph.push(('│', col_color));
                 } else {
