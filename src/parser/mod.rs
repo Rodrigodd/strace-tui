@@ -35,7 +35,7 @@ pub type ParseResult<T> = Result<T, ParseError>;
 #[derive(Debug)]
 pub struct StraceParser {
     /// Pending unfinished syscalls, keyed by PID
-    unfinished: HashMap<u32, SyscallEntry>,
+    unfinished: HashMap<u32, usize>,
     /// Accumulated errors during parsing
     pub errors: Vec<(usize, ParseError)>,
     /// Current line number
@@ -98,16 +98,17 @@ impl StraceParser {
                     // Handle special cases
                     if entry.is_unfinished {
                         // Store unfinished syscall
-                        self.unfinished.insert(entry.pid, entry);
+                        self.unfinished.insert(entry.pid, entries.len());
+                        current_entry = Some(entry);
                     } else if entry.is_resumed {
                         // Complete previously unfinished syscall
-                        if let Some(mut unfinished) = self.unfinished.remove(&entry.pid) {
+                        if let Some(unfinished) = self.unfinished.remove(&entry.pid) {
+                            let unfinished = entries.get_mut(unfinished).unwrap();
                             unfinished.return_value = entry.return_value;
                             unfinished.errno = entry.errno;
                             unfinished.duration = entry.duration;
                             unfinished.is_resumed = false;
                             unfinished.is_unfinished = false;
-                            current_entry = Some(unfinished);
                         } else {
                             // Resumed without unfinished - just store as-is with error
                             self.errors.push((
