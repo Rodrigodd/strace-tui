@@ -76,7 +76,10 @@ pub fn run_tui(
 fn run_app<B: ratatui::backend::Backend + io::Write>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-) -> io::Result<()> {
+) -> Result<(), B::Error>
+where
+    B::Error: From<std::io::Error>,
+{
     loop {
         let app_ref = &mut *app;
         terminal.draw(move |f| ui::draw(f, app_ref))?;
