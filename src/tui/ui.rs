@@ -325,15 +325,14 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                                 available_for_left.saturating_sub(arrow_len + syscall_len);
                             let truncated_args = truncate_line(&args_and_ret, available_for_args);
 
-                            let mut spans = vec![
-                                Span::styled(arrow_str, Style::default().fg(rest_color)),
-                                Span::styled(
-                                    syscall_name.to_string(),
-                                    Style::default().fg(syscall_color),
-                                ),
-                                Span::styled(truncated_args, Style::default().fg(rest_color)),
-                                Span::styled(" ", Style::default()),
-                            ];
+                            let mut spans =
+                                vec![Span::styled(arrow_str, Style::default().fg(rest_color))];
+                            spans.extend(syscall_spans);
+                            spans.push(Span::styled(
+                                truncated_args,
+                                Style::default().fg(rest_color),
+                            ));
+                            spans.push(Span::styled(" ", Style::default()));
 
                             if has_graph {
                                 spans.push(Span::raw("  "));
