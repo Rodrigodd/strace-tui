@@ -279,19 +279,19 @@ impl App {
     fn build_nested_prefix(parent_prefix: &TreePrefix, parent_is_last: bool) -> TreePrefix {
         let mut prefix = *parent_prefix;
 
-        prefix
+        if let Some(last) = prefix
             .iter_mut()
             .take_while(|&&mut e| e != TreeElement::Null)
             .last()
-            .map(|last| {
-                *last = if !parent_is_last {
-                    // Parent has siblings after, use vertical line
-                    TreeElement::Vertical
-                } else {
-                    // Parent is last, use spaces
-                    TreeElement::Space
-                }
-            });
+        {
+            *last = if !parent_is_last {
+                // Parent has siblings after, use vertical line
+                TreeElement::Vertical
+            } else {
+                // Parent is last, use spaces
+                TreeElement::Space
+            };
+        }
 
         prefix
     }

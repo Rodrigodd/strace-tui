@@ -1008,7 +1008,7 @@ fn format_resolved_frame(
 
     if available < 18 {
         // Too narrow, just show minimal
-        return format!("<truncated>");
+        return "<truncated>".to_string();
     }
 
     // Build full location string
