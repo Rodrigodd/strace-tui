@@ -64,14 +64,11 @@ strace-tui trace --keep-trace --trace-file my_trace.txt ./my_program
 ### TUI Keybindings
 - `↑`/`↓` or `j`/`k`: Navigate through syscalls
 - `Enter`/`Space`: Expand syscall details / Toggle backtrace
-- `x`/`Backspace`: Collapse current item
 - `PageUp`/`PageDown`: Fast scroll
 - `Home`/`g`: Jump to first
 - `End`/`G`: Jump to last
 - `e`: Expand all syscalls
 - `c`: Collapse all
-- `r`: Resolve current backtrace (slow)
-- `R`: Resolve all backtraces (very slow)
 - `?` or `h`: Show help
 - `q` or `Ctrl+C`: Quit
 

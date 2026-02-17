@@ -1,14 +1,13 @@
 use super::app::{App, split_arguments};
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {
-    // Layout is the same regardless of search state (search bar replaces divider)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -32,16 +31,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.search_state.active {
         // Draw search bar
         draw_search_bar(f, app, chunks[3]);
-
-        // Draw footer
-        draw_footer(f, app, chunks[4]);
     } else {
         // Draw divider
         draw_divider(f, chunks[3]);
-
-        // Draw footer
-        draw_footer(f, app, chunks[4]);
     }
+
+    // Draw footer
+    draw_footer(f, app, chunks[4]);
 
     // Draw help modal on top if active
     if app.show_help {
@@ -134,12 +130,13 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     None
                 };
 
-                // For signals and exits, keep the old behavior (whole line colored)
                 if is_signal || is_exit {
-                    let syscall_info = if is_signal {
-                        format!("--- {} ---", entry.syscall_name.to_uppercase())
+                    let syscall_info = if let Some(signal) = &entry.signal {
+                        format!("--- {} ---", signal.signal_name)
+                    } else if let Some(exit) = &entry.exit_info {
+                        format!("+++ exit {} +++", exit.code)
                     } else {
-                        format!("+++ {} +++", entry.syscall_name)
+                        unreachable!()
                     };
 
                     // Get graph for this entry
@@ -211,7 +208,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     }
                 } else {
                     // Normal syscall - color the syscall name, rest is white or red
-                    let args_preview = truncate(&entry.arguments, 30);
+                    let args_preview = &entry.arguments;
                     let ret = entry.return_value.as_deref().unwrap_or("?");
 
                     // Get graph for this entry
@@ -688,31 +685,23 @@ fn draw_search_bar(f: &mut Frame, app: &App, area: Rect) {
 
     let text = if match_info.is_empty() {
         format!(
-            "Search: {}█  Enter:accept Esc:cancel n:next N:prev",
+            "Search: {}█  Enter:accept | Esc: cancel | Ctrl-n/N: next/prev",
             app.search_state.query
         )
     } else {
         format!(
-            "Search: {}█  [{}]  Enter:accept Esc:cancel n:next N:prev",
+            "Search: {}█  [{}]  Enter:accept | Esc: cancel | Ctrl-n/N: next/prev",
             app.search_state.query, match_info
         )
     };
 
-    let paragraph =
-        Paragraph::new(text).style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    let paragraph = Paragraph::new(text).style(Style::default().fg(Color::White));
 
     f.render_widget(paragraph, area);
 }
 
 fn draw_help(f: &mut Frame) {
-    let help_text = vec![
-        Line::from(Span::styled(
-            "strace-tui Help",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
+    let left_help_text = vec![
         Line::from(Span::styled(
             "Navigation:",
             Style::default().add_modifier(Modifier::UNDERLINED),
@@ -731,34 +720,36 @@ fn draw_help(f: &mut Frame) {
             Style::default().add_modifier(Modifier::UNDERLINED),
         )),
         Line::from("  Enter/Space Toggle expansion"),
-        Line::from("  Enter       Open file in editor (on resolved backtrace)"),
-        Line::from("  ←           Collapse deepest fold"),
-        Line::from("  →           Expand current item"),
-        Line::from("  x/Backspace Collapse current item"),
+        Line::from("  Enter       Open backtrace in editor"),
+        Line::from("  ←           Collapse item"),
+        Line::from("  →           Expand item"),
         Line::from("  e           Expand all syscalls"),
         Line::from("  c           Collapse all items"),
-        Line::from("  r           Resolve current backtrace"),
-        Line::from("  R           Resolve all backtraces (slow!)"),
         Line::from(""),
+        Line::from(Span::styled(
+            "Other:",
+            Style::default().add_modifier(Modifier::UNDERLINED),
+        )),
+        Line::from("  q/Q         Quit"),
+        Line::from("  ?           Toggle this help"),
+        Line::from("  Ctrl+C      Force quit"),
+    ];
+
+    let right_help_text = vec![
         Line::from(Span::styled(
             "Filtering:",
             Style::default().add_modifier(Modifier::UNDERLINED),
         )),
         Line::from("  h           Hide/show current syscall"),
         Line::from("  H           Open filter modal"),
-        Line::from("  .           Toggle show hidden (ghost mode)"),
+        Line::from("  .           Toggle show hidden"),
         Line::from(""),
         Line::from(Span::styled(
             "Filter Modal:",
             Style::default().add_modifier(Modifier::UNDERLINED),
         )),
-        Line::from("  ↑/↓/j/k     Navigate list"),
         Line::from("  Space/Enter Toggle checkbox"),
         Line::from("  a           Toggle all"),
-        Line::from("  PgUp/PgDn   Scroll full page"),
-        Line::from("  Ctrl+U/D    Scroll half page"),
-        Line::from("  Home/g      Jump to first"),
-        Line::from("  End/G       Jump to last"),
         Line::from("  Esc/H/q     Close modal"),
         Line::from(""),
         Line::from(Span::styled(
@@ -771,13 +762,6 @@ fn draw_help(f: &mut Frame) {
         Line::from("  Enter       Accept search"),
         Line::from("  Esc         Cancel search"),
         Line::from(""),
-        Line::from(Span::styled(
-            "Other:",
-            Style::default().add_modifier(Modifier::UNDERLINED),
-        )),
-        Line::from("  q/Q         Quit"),
-        Line::from("  ?           Toggle this help"),
-        Line::from("  Ctrl+C      Force quit"),
         Line::from(""),
         Line::from(Span::styled(
             "Press ? or Esc to close help",
@@ -785,13 +769,30 @@ fn draw_help(f: &mut Frame) {
         )),
     ];
 
-    let help = Paragraph::new(help_text)
-        .block(Block::default().borders(Borders::ALL).title("Help"))
+    let height = left_help_text.len().max(right_help_text.len()) as u16 + 2;
+    let width = 39 * 2 + 2; // 57 chars per column + borders
+    let area = centered_rect_absolute(width, height, f.area());
+    f.render_widget(ratatui::widgets::Clear, area);
+
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    let left_help = Paragraph::new(left_help_text)
+        .block(
+            Block::default()
+                .borders(Borders::LEFT | Borders::TOP | Borders::BOTTOM)
+                .title("Help"),
+        )
         .wrap(Wrap { trim: true });
 
-    let area = centered_rect(60, 80, f.area());
-    f.render_widget(ratatui::widgets::Clear, area);
-    f.render_widget(help, area);
+    let right_help = Paragraph::new(right_help_text)
+        .block(Block::default().borders(Borders::RIGHT | Borders::TOP | Borders::BOTTOM))
+        .wrap(Wrap { trim: true });
+
+    f.render_widget(left_help, columns[0]);
+    f.render_widget(right_help, columns[1]);
 }
 
 fn draw_filter_modal(f: &mut Frame, app: &App) {
@@ -995,20 +996,19 @@ fn format_resolved_frame(
     prefix_len: usize,
     width: usize,
 ) -> String {
-    let symbol = if resolved.is_inlined { "↪" } else { "→" };
     let inline_tag = if resolved.is_inlined {
         " (inlined)"
     } else {
         ""
     };
 
-    // Calculate available width after prefix, symbol, " at ", and tag
-    let overhead = prefix_len + 2 + 4 + inline_tag.len(); // "↪ " + " at " + tag
+    // Calculate available width after prefix, " at ", and tag
+    let overhead = prefix_len + 4 + inline_tag.len(); // prefix_len + " at " + tag
     let available = width.saturating_sub(overhead);
 
-    if available < 20 {
+    if available < 18 {
         // Too narrow, just show minimal
-        return format!("{} <truncated>", symbol);
+        return format!("<truncated>");
     }
 
     // Build full location string
@@ -1024,10 +1024,7 @@ fn format_resolved_frame(
 
     if total_needed <= available {
         // Fits without truncation
-        return format!(
-            "{} {} at {}{}",
-            symbol, resolved.function, location, inline_tag
-        );
+        return format!("{} at {}{}", resolved.function, location, inline_tag);
     }
 
     // Need to truncate - split available space intelligently
@@ -1070,10 +1067,7 @@ fn format_resolved_frame(
         location.clone()
     };
 
-    format!(
-        "{} {} at {}{}",
-        symbol, function_display, location_display, inline_tag
-    )
+    format!("{} at {}{}", function_display, location_display, inline_tag)
 }
 
 fn truncate_line(s: &str, width: usize) -> String {
@@ -1093,21 +1087,22 @@ fn truncate_line(s: &str, width: usize) -> String {
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
+    let [popup_layout] = Layout::vertical([Constraint::Percentage(percent_y)])
+        .flex(Flex::Center)
+        .areas(r);
 
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
+    Layout::horizontal([Constraint::Percentage(percent_x)])
+        .flex(Flex::Center)
+        .areas::<1>(popup_layout)[0]
+}
+
+fn centered_rect_absolute(width: u16, height: u16, r: Rect) -> Rect {
+    let x = r.x + (r.width.saturating_sub(width)) / 2;
+    let y = r.y + (r.height.saturating_sub(height)) / 2;
+    Rect {
+        x,
+        y,
+        width: width.min(r.width),
+        height: height.min(r.height),
+    }
 }

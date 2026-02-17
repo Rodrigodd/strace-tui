@@ -3,16 +3,16 @@ use crate::parser::{Addr2LineResolver, SummaryStats, SyscallEntry};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::HashSet;
 
-pub const MAX_TREE_DEPTH: usize = 8;
+pub const MAX_TREE_DEPTH: usize = 4;
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TreeElement {
-    Empty,      // No element (end of prefix)
-    Space,      // Spacing for parent that is last (renders as "    ")
-    Vertical,   // │ (parent has siblings) - renders as "│   "
-    Branch,     // ├ (middle child) - renders as "├─ "
-    LastBranch, // └ (last child) - renders as "└─ "
+    Null,       // Terminator for the prefix array
+    Space,      // "  " Spacing
+    Vertical,   // "│ " parent has siblings
+    Branch,     // "├ " middle child
+    LastBranch, // "└ " last child
 }
 
 pub type TreePrefix = [TreeElement; MAX_TREE_DEPTH];
@@ -219,8 +219,8 @@ impl App {
         self.last_visible_height = height;
     }
 
-    /// Converts TreePrefix array to display string
-    /// Each element renders to fixed-width string with spacing
+    /// Converts TreePrefix array to display string. Each element renders to fixed-width string
+    /// with spacing.
     pub fn tree_prefix_to_string(prefix: &TreePrefix) -> String {
         let mut result = String::new();
 
@@ -230,61 +230,23 @@ impl App {
         // Render each tree element
         for &elem in prefix.iter() {
             match elem {
-                TreeElement::Empty => break,                       // End of prefix
-                TreeElement::Space => result.push_str("    "), // 4 spaces for parent that is last
-                TreeElement::Vertical => result.push_str("│   "), // Vertical + 3 spaces
-                TreeElement::Branch => result.push_str("├─ "), // Branch + horizontal + space
-                TreeElement::LastBranch => result.push_str("└─ "), // Last branch + horizontal + space
+                TreeElement::Null => break,
+                TreeElement::Space => result.push_str("   "),
+                TreeElement::Vertical => result.push_str("│  "),
+                TreeElement::Branch => result.push_str("├─ "),
+                TreeElement::LastBranch => result.push_str("└─ "),
             }
         }
 
         result
     }
 
-    /// Converts TreePrefix array to display string for headers (no horizontal line on last element)
-    /// Headers need "├" or "└" without the horizontal to place arrow directly after
+    /// Converts TreePrefix array to display string for headers (no horizontal line on last
+    /// element). Headers need "├" or "└" without the horizontal to place arrow directly after.
     pub fn tree_prefix_to_string_header(prefix: &TreePrefix) -> String {
-        let mut result = String::new();
-
-        // Add leading indentation (2 spaces)
-        result.push_str("  ");
-
-        // Render each tree element, but handle last one differently
-        let mut last_idx = 0;
-        for (idx, &elem) in prefix.iter().enumerate() {
-            if elem == TreeElement::Empty {
-                last_idx = idx;
-                break;
-            }
-        }
-        if last_idx == 0 {
-            last_idx = MAX_TREE_DEPTH;
-        }
-
-        for (idx, &elem) in prefix.iter().enumerate() {
-            match elem {
-                TreeElement::Empty => break,
-                TreeElement::Space => result.push_str("    "),
-                TreeElement::Vertical => result.push_str("│   "),
-                TreeElement::Branch => {
-                    if idx == last_idx - 1 {
-                        // Last element for header: just "├" without horizontal
-                        result.push('├');
-                    } else {
-                        result.push_str("├─ ");
-                    }
-                }
-                TreeElement::LastBranch => {
-                    if idx == last_idx - 1 {
-                        // Last element for header: just "└" without horizontal
-                        result.push('└');
-                    } else {
-                        result.push_str("└─ ");
-                    }
-                }
-            }
-        }
-
+        let mut result = Self::tree_prefix_to_string(prefix);
+        result.pop();
+        result.pop();
         result
     }
 
@@ -295,7 +257,7 @@ impl App {
         // Find first empty slot
         let depth = prefix
             .iter()
-            .position(|&e| e == TreeElement::Empty)
+            .position(|&e| e == TreeElement::Null)
             .unwrap_or(MAX_TREE_DEPTH);
 
         if depth >= MAX_TREE_DEPTH {
@@ -312,32 +274,24 @@ impl App {
         prefix
     }
 
-    /// Builds base prefix for nested children
-    /// Replaces the parent's branch element with vertical/space continuation
+    /// Builds base prefix for nested children. Replaces the parent's branch element with
+    /// vertical/space continuation.
     fn build_nested_prefix(parent_prefix: &TreePrefix, parent_is_last: bool) -> TreePrefix {
         let mut prefix = *parent_prefix;
 
-        // Find the parent's branch element (the last non-Empty element)
-        let mut parent_branch_idx = None;
-        for (idx, &elem) in prefix.iter().enumerate() {
-            if elem == TreeElement::Empty {
-                if idx > 0 {
-                    parent_branch_idx = Some(idx - 1);
+        prefix
+            .iter_mut()
+            .take_while(|&&mut e| e != TreeElement::Null)
+            .last()
+            .map(|last| {
+                *last = if !parent_is_last {
+                    // Parent has siblings after, use vertical line
+                    TreeElement::Vertical
+                } else {
+                    // Parent is last, use spaces
+                    TreeElement::Space
                 }
-                break;
-            }
-        }
-
-        if let Some(idx) = parent_branch_idx {
-            // Replace parent's Branch/LastBranch with Vertical or Space
-            if !parent_is_last {
-                // Parent has siblings after, use vertical line (renders as "│   ")
-                prefix[idx] = TreeElement::Vertical;
-            } else {
-                // Parent is last, use spaces (rendering adds 4 spaces)
-                prefix[idx] = TreeElement::Space;
-            }
-        }
+            });
 
         prefix
     }
@@ -405,7 +359,7 @@ impl App {
                 let total_items = items.len();
 
                 // Base prefix: empty (leading spaces added during rendering)
-                let base_prefix: TreePrefix = [TreeElement::Empty; MAX_TREE_DEPTH];
+                let base_prefix: TreePrefix = [TreeElement::Null; MAX_TREE_DEPTH];
                 let mut item_idx = 0;
 
                 // Arguments
@@ -654,20 +608,11 @@ impl App {
             KeyCode::Right => {
                 self.expand_current();
             }
-            KeyCode::Backspace | KeyCode::Char('x') => {
-                self.collapse_current();
-            }
             KeyCode::Char('e') => {
                 self.expand_all();
             }
             KeyCode::Char('c') if !event.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.collapse_all();
-            }
-            KeyCode::Char('r') => {
-                self.resolve_current_backtrace();
-            }
-            KeyCode::Char('R') => {
-                self.resolve_all_backtraces();
             }
 
             // Search controls
@@ -1168,46 +1113,6 @@ impl App {
         // Save position for potential re-expansion with right arrow
         self.last_collapsed_position = saved_position;
         // Keep the scroll saved for re-expansion (don't change last_collapsed_scroll)
-    }
-
-    fn collapse_current(&mut self) {
-        if self.selected_line >= self.display_lines.len() {
-            return;
-        }
-
-        // Find the entry_idx of the current line and collapse it
-        let entry_idx = match &self.display_lines[self.selected_line] {
-            DisplayLine::SyscallHeader { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::ArgumentsHeader { entry_idx, .. } => {
-                // For arguments header, collapse just the arguments
-                let idx = *entry_idx;
-                self.expanded_arguments.remove(&idx);
-                self.rebuild_display_lines();
-                return;
-            }
-            DisplayLine::ArgumentLine { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::ReturnValue { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::Error { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::Duration { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::Signal { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::Exit { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::BacktraceHeader { entry_idx, .. } => {
-                // For backtrace header, collapse just the backtrace
-                let idx = *entry_idx;
-                self.expanded_backtraces.remove(&idx);
-                self.rebuild_display_lines();
-                return;
-            }
-            DisplayLine::BacktraceFrame { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::BacktraceResolved { entry_idx, .. } => Some(*entry_idx),
-        };
-
-        if let Some(idx) = entry_idx {
-            self.expanded_items.remove(&idx);
-            self.expanded_arguments.remove(&idx);
-            self.expanded_backtraces.remove(&idx);
-            self.rebuild_display_lines();
-        }
     }
 
     fn expand_all(&mut self) {
@@ -1977,44 +1882,6 @@ impl App {
                 .saturating_sub(visible_height)
                 + 1;
         }
-    }
-
-    fn resolve_current_backtrace(&mut self) {
-        if self.selected_line >= self.display_lines.len() {
-            return;
-        }
-
-        // Find the entry_idx from the current line
-        let entry_idx = match &self.display_lines[self.selected_line] {
-            DisplayLine::SyscallHeader { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::ArgumentsHeader { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::ArgumentLine { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::ReturnValue { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::Error { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::Duration { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::Signal { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::Exit { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::BacktraceHeader { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::BacktraceFrame { entry_idx, .. } => Some(*entry_idx),
-            DisplayLine::BacktraceResolved { entry_idx, .. } => Some(*entry_idx),
-        };
-
-        if let Some(idx) = entry_idx
-            && let Some(entry) = self.entries.get_mut(idx)
-            && !entry.backtrace.is_empty()
-        {
-            let _ = self.resolver.resolve_frames(&mut entry.backtrace);
-            self.rebuild_display_lines();
-        }
-    }
-
-    fn resolve_all_backtraces(&mut self) {
-        for entry in self.entries.iter_mut() {
-            if !entry.backtrace.is_empty() {
-                let _ = self.resolver.resolve_frames(&mut entry.backtrace);
-            }
-        }
-        self.rebuild_display_lines();
     }
 }
 

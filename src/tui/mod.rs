@@ -1,20 +1,19 @@
 mod app;
-mod events;
 mod process_graph;
 mod syscall_colors;
 mod ui;
 
 pub use app::App;
-use events::EventHandler;
 
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEvent, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
+use std::time::Duration;
 
 pub fn run_tui(
     entries: Vec<crate::parser::SyscallEntry>,
@@ -58,10 +57,9 @@ pub fn run_tui(
 
     // Create app
     let mut app = App::new(entries, summary, file_path);
-    let mut event_handler = EventHandler::new();
 
     // Run the main loop
-    let res = run_app(&mut terminal, &mut app, &mut event_handler);
+    let res = run_app(&mut terminal, &mut app);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -78,13 +76,12 @@ pub fn run_tui(
 fn run_app<B: ratatui::backend::Backend + io::Write>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-    event_handler: &mut EventHandler,
 ) -> io::Result<()> {
     loop {
         let app_ref = &mut *app;
         terminal.draw(move |f| ui::draw(f, app_ref))?;
 
-        if let Some(event) = event_handler.next()? {
+        if let Some(event) = get_event()? {
             app.handle_event(event);
         }
 
@@ -128,6 +125,18 @@ fn run_app<B: ratatui::backend::Backend + io::Write>(
             terminal.clear()?;
         }
     }
+}
+
+pub fn get_event() -> io::Result<Option<KeyEvent>> {
+    if event::poll(Duration::from_millis(100))?
+        && let Event::Key(key) = event::read()?
+    {
+        // Only process key press events, not release
+        if key.kind == KeyEventKind::Press {
+            return Ok(Some(key));
+        }
+    }
+    Ok(None)
 }
 
 /// Open editor in foreground (blocking)

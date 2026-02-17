@@ -31,6 +31,14 @@ pub struct ProcessGraph {
 }
 
 impl ProcessGraph {
+    fn is_fork_syscall(syscall_name: &str) -> bool {
+        matches!(syscall_name, "fork" | "vfork" | "clone" | "clone3")
+    }
+
+    fn is_wait_syscall(syscall_name: &str) -> bool {
+        matches!(syscall_name, "wait4" | "waitid" | "waitpid")
+    }
+
     pub fn build(entries: &[SyscallEntry]) -> Self {
         let mut processes: HashMap<u32, ProcessInfo> = HashMap::new();
         let mut pid_first_seen: HashMap<u32, usize> = HashMap::new();
@@ -45,10 +53,8 @@ impl ProcessGraph {
             pid_first_seen.entry(pid).or_insert(idx);
 
             // Detect fork syscalls
-            if matches!(
-                entry.syscall_name.as_str(),
-                "fork" | "vfork" | "clone" | "clone3"
-            ) && let Some(ref ret) = entry.return_value
+            if Self::is_fork_syscall(&entry.syscall_name)
+                && let Some(ref ret) = entry.return_value
             {
                 // Try to parse return value as child PID
                 if let Ok(child_pid) = ret.trim().parse::<u32>()
@@ -128,10 +134,7 @@ impl ProcessGraph {
         let mut graph = Vec::new();
 
         // Check if this is a fork
-        let is_fork = matches!(
-            entry.syscall_name.as_str(),
-            "fork" | "vfork" | "clone" | "clone3"
-        );
+        let is_fork = Self::is_fork_syscall(&entry.syscall_name);
         let child_pid = if is_fork {
             entry
                 .return_value
@@ -143,7 +146,7 @@ impl ProcessGraph {
         };
 
         // Check if this is a wait that completes
-        let is_wait = matches!(entry.syscall_name.as_str(), "wait4" | "waitid" | "waitpid");
+        let is_wait = Self::is_wait_syscall(&entry.syscall_name);
         // For wait, try return value first, then fall back to first argument (the PID waited for)
         let waited_pid = if is_wait {
             entry

@@ -4,11 +4,13 @@ use ratatui::style::Color;
 pub fn syscall_category_color(name: &str) -> Color {
     match name {
         // File I/O - Blue
-        "read" | "write" | "pread" | "pwrite" | "readv" | "writev" | "preadv" | "pwritev"
-        | "open" | "openat" | "openat2" | "creat" | "close" | "dup" | "dup2" | "dup3" | "lseek"
-        | "llseek" | "_llseek" | "fcntl" | "ioctl" | "fstat" | "stat" | "lstat" | "fstatat"
-        | "newfstatat" | "statx" | "ftruncate" | "truncate" | "fsync" | "fdatasync" | "sync"
-        | "syncfs" | "access" | "faccessat" | "faccessat2" => Color::Blue,
+        "read" | "write" | "pread" | "pwrite" | "pread64" | "pwrite64" | "readv" | "writev"
+        | "preadv" | "pwritev" | "open" | "openat" | "openat2" | "creat" | "close" | "dup"
+        | "dup2" | "dup3" | "lseek" | "llseek" | "_llseek" | "fcntl" | "ioctl" | "fstat"
+        | "stat" | "lstat" | "fstatat" | "newfstatat" | "statx" | "ftruncate" | "truncate"
+        | "fsync" | "fdatasync" | "sync" | "syncfs" | "access" | "faccessat" | "faccessat2" => {
+            Color::Blue
+        }
 
         // Process/Thread Control - Magenta
         "fork" | "vfork" | "clone" | "clone3" | "execve" | "execveat" | "exit" | "exit_group"

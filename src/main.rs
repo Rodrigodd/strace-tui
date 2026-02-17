@@ -200,6 +200,7 @@ fn run_strace(command: Vec<String>, trace_file: Option<String>) -> String {
         .arg("-o")
         .arg(&trace_path)
         .arg("-t") // timestamps
+        .arg("-T") // show syscall duration
         .arg("-k") // backtraces
         .arg("-f") // follow forks
         .arg("-s")
