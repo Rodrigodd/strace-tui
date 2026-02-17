@@ -27,7 +27,7 @@ crossterm = "0.29"
 # Logging
 log = "0.4"
 env_logger = "0.11"
-dirs = "5.0"
+dirs = "6.0"
 
 [dev-dependencies]
 pretty_assertions = "1.4"
