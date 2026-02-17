@@ -56,15 +56,23 @@ impl ProcessGraph {
             // Detect fork syscalls
             if Self::is_fork_syscall(&entry.syscall_name)
                 && let Some(ref ret) = entry.return_value
-            {
                 // Try to parse return value as child PID
-                if let Ok(child_pid) = ret.trim().parse::<u32>()
-                    && child_pid > 0
-                {
-                    fork_relationships.push((idx, pid, child_pid));
-                    pid_first_seen.entry(child_pid).or_insert(idx);
-                    pid_last_seen.insert(child_pid, idx);
-                }
+                && let Ok(child_pid) = ret.trim().parse::<u32>()
+                && child_pid > 0
+            {
+                fork_relationships.push((idx, pid, child_pid));
+                pid_first_seen.entry(child_pid).or_insert(idx);
+                pid_last_seen.insert(child_pid, idx);
+            }
+
+            // Detect wait syscalls, to update the last seen index of waited-for PIDs
+            if Self::is_wait_syscall(&entry.syscall_name)
+                && let Some(ref ret) = entry.return_value
+                // Try to parse return value as waited PID
+                && let Ok(waited_pid) = ret.trim().parse::<u32>()
+                && waited_pid > 0
+            {
+                pid_last_seen.insert(waited_pid, idx);
             }
         }
 
