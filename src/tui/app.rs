@@ -549,14 +549,20 @@ impl App {
 
         // Restore cursor to the same entry
         if let Some(entry_idx) = current_entry_idx {
-            self.selected_line = self
+            if self
                 .display_lines
-                .iter()
-                .position(|line| line.entry_idx() >= entry_idx)
-                .unwrap_or(0);
+                .get(self.selected_line)
+                .map_or(true, |x| x.entry_idx() != entry_idx)
+            {
+                self.selected_line = self
+                    .display_lines
+                    .iter()
+                    .position(|line| line.entry_idx() >= entry_idx)
+                    .unwrap_or(0);
 
-            // Restore cursor screen position
-            self.scroll_offset = self.selected_line.saturating_sub(cursor_screen_pos);
+                // Restore cursor screen position
+                self.scroll_offset = self.selected_line.saturating_sub(cursor_screen_pos);
+            }
         }
     }
 
