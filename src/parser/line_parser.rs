@@ -227,8 +227,10 @@ fn parse_duration(input: &str) -> IResult<&str, f64> {
 
 /// Parse resumed syscall line
 fn parse_resumed_line(pid: u32, timestamp: String, input: &str) -> ParseResult<SyscallEntry> {
+    // Examples:
     // <... syscall_name resumed> args) = retval
     // <... clone3 resumed> => {parent_tid=[7197]}, 88) = 7197
+    // <... wait4 resumed>, [{WIFEXITED(s) && WEXITSTATUS(s) == 0}], 0, NULL) = 24983
     let input = input.trim_start();
 
     // Extract syscall name
@@ -250,10 +252,9 @@ fn parse_resumed_line(pid: u32, timestamp: String, input: &str) -> ParseResult<S
     if let Some(pos) = input.find("resumed>") {
         let after_resumed = &input[pos + 8..].trim_start();
 
-        // Look for the return value pattern ") =" and fallback to just "=" if ") =" is not found.
-        let ret_part = if let Some(ret_start) = after_resumed.find(") =") {
-            // Everything before ") =" is the resumed arguments
-            let args_part = &after_resumed[..ret_start + 1]; // Include the closing ")"
+        let ret_part = if let Some(ret_start) = after_resumed.find(") = ") {
+            // Everything before ") = " is the resumed arguments
+            let args_part = &after_resumed[..ret_start + 1];
             entry.arguments = args_part.trim().to_string();
 
             Some(&after_resumed[ret_start + 1..])
@@ -537,6 +538,23 @@ mod tests {
         assert_eq!(entry.timestamp, "11:52:10.217868");
         assert_eq!(entry.syscall_name, "clone3");
         assert_eq!(entry.return_value, Some("7197".to_string()));
+        assert!(entry.is_resumed);
+    }
+
+    #[test]
+    fn test_parse_wait4_resumed() {
+        // wait4 resumed continues with arguments directly after resumed>
+        let line = "24982 12:58:40 <... wait4 resumed>, [{WIFEXITED(s) && WEXITSTATUS(s) == 0}], 0, NULL) = 24983";
+        let entry = parse_strace_line(line).unwrap();
+
+        assert_eq!(entry.pid, 24982);
+        assert_eq!(entry.timestamp, "12:58:40");
+        assert_eq!(entry.syscall_name, "wait4");
+        assert_eq!(
+            entry.arguments,
+            ", [{WIFEXITED(s) && WEXITSTATUS(s) == 0}], 0, NULL)"
+        );
+        assert_eq!(entry.return_value, Some("24983".to_string()));
         assert!(entry.is_resumed);
     }
 }
