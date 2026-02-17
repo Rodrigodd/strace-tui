@@ -110,7 +110,6 @@ impl StraceParser {
                         current_entry = Some(entry);
                     } else if entry.is_resumed {
                         if merge_resumed {
-                            // OLD BEHAVIOR: Merge resumed into unfinished
                             if let Some(unfinished_idx) = self.unfinished.remove(&entry.pid) {
                                 let unfinished = entries.get_mut(unfinished_idx).unwrap();
                                 unfinished.return_value = entry.return_value;
@@ -129,7 +128,6 @@ impl StraceParser {
                                 current_entry = Some(entry);
                             }
                         } else {
-                            // NEW BEHAVIOR: Keep separate, link them
                             if let Some(unfinished_idx) = self.unfinished.remove(&entry.pid) {
                                 let mut resumed_entry = entry;
                                 resumed_entry.unfinished_entry_idx = Some(unfinished_idx);

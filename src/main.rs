@@ -28,18 +28,18 @@ enum Commands {
         json: bool,
 
         /// Output file (only with --json)
-        #[arg(short, long, value_name = "FILE")]
+        #[arg(short, long, value_name = "FILE", requires = "json")]
         output: Option<String>,
 
         /// Resolve backtraces using addr2line (only with --json)
-        #[arg(short, long)]
+        #[arg(short, long, requires = "json")]
         resolve: bool,
 
         /// Pretty print JSON output (only with --json)
-        #[arg(short, long)]
+        #[arg(short, long, requires = "json")]
         pretty: bool,
 
-        /// Merge resumed syscalls into unfinished syscalls (old behavior)
+        /// Merge resumed syscalls into unfinished syscalls
         #[arg(long)]
         merge_resumed: bool,
     },
@@ -47,7 +47,7 @@ enum Commands {
     /// Run strace on a command and parse the output
     Trace {
         /// Command to trace
-        #[arg(required = true)]
+        #[arg(required = true, num_args = 1.., value_name = "CMD", trailing_var_arg = true)]
         command: Vec<String>,
 
         /// Output JSON instead of opening TUI
@@ -55,28 +55,32 @@ enum Commands {
         json: bool,
 
         /// Output file (only with --json)
-        #[arg(short, long, value_name = "FILE")]
+        #[arg(short, long, value_name = "FILE", requires = "json")]
         output: Option<String>,
 
         /// Resolve backtraces using addr2line (only with --json)
-        #[arg(short, long)]
+        #[arg(short, long, requires = "json")]
         resolve: bool,
 
         /// Pretty print JSON output (only with --json)
-        #[arg(short, long)]
+        #[arg(short, long, requires = "json")]
         pretty: bool,
 
-        /// Keep the strace output file (by default it's deleted)
-        #[arg(short, long)]
-        keep_trace: bool,
-
-        /// Path for strace output (default: temp file)
+        /// Path for strace output (default: temp file, deleted after parsing)
         #[arg(long, value_name = "FILE")]
         trace_file: Option<String>,
 
-        /// Merge resumed syscalls into unfinished syscalls (old behavior)
+        /// Merge resumed syscalls into unfinished syscalls
         #[arg(long)]
         merge_resumed: bool,
+
+        /// Flags to pass to strace.
+        #[arg(
+            long,
+            value_name = "STRACE_ARGS",
+            default_value = "-tt -T -k -f -s 1024"
+        )]
+        strace_flags: String,
     },
 }
 
@@ -104,11 +108,12 @@ fn main() {
             output,
             resolve,
             pretty,
-            keep_trace,
             trace_file,
             merge_resumed,
+            strace_flags,
         } => {
-            let trace_path = run_strace(command, trace_file);
+            let is_temp = trace_file.is_none();
+            let trace_path = run_strace(command, trace_file, strace_flags);
 
             if json {
                 parse_file_json(&trace_path, output, resolve, pretty, merge_resumed);
@@ -116,11 +121,9 @@ fn main() {
                 parse_file_tui(&trace_path, merge_resumed);
             }
 
-            // Clean up trace file unless keep_trace is set
-            if !keep_trace {
+            if is_temp {
+                // Clean up temp file
                 std::fs::remove_file(&trace_path).ok();
-            } else {
-                eprintln!("Trace file kept at: {}", trace_path);
             }
         }
     }
@@ -187,7 +190,7 @@ fn parse_file_json(
     output_results(entries, parser.errors, output, pretty);
 }
 
-fn run_strace(command: Vec<String>, trace_file: Option<String>) -> String {
+fn run_strace(command: Vec<String>, trace_file: Option<String>, flags: String) -> String {
     if command.is_empty() {
         eprintln!("Error: No command specified");
         std::process::exit(1);
@@ -211,16 +214,14 @@ fn run_strace(command: Vec<String>, trace_file: Option<String>) -> String {
     eprintln!("Running strace on: {}", command.join(" "));
     eprintln!("Trace output: {}", trace_path);
 
+    // Parse strace flags from the flags string
+    let strace_args: Vec<&str> = flags.split_whitespace().collect();
+
     // Run strace
     let status = Command::new("strace")
+        .args(&strace_args) // use parsed flags instead of hardcoded ones
         .arg("-o")
         .arg(&trace_path)
-        .arg("-t") // timestamps
-        .arg("-T") // show syscall duration
-        .arg("-k") // backtraces
-        .arg("-f") // follow forks
-        .arg("-s")
-        .arg("1024") // string capture size
         .args(&command)
         .status();
 
