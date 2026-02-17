@@ -228,6 +228,7 @@ fn parse_duration(input: &str) -> IResult<&str, f64> {
 /// Parse resumed syscall line
 fn parse_resumed_line(pid: u32, timestamp: String, input: &str) -> ParseResult<SyscallEntry> {
     // <... syscall_name resumed> args) = retval
+    // <... clone3 resumed> => {parent_tid=[7197]}, 88) = 7197
     let input = input.trim_start();
 
     // Extract syscall name
@@ -245,28 +246,39 @@ fn parse_resumed_line(pid: u32, timestamp: String, input: &str) -> ParseResult<S
     let mut entry = SyscallEntry::new(pid, timestamp, syscall_name);
     entry.is_resumed = true;
 
-    // Try to parse return value after resumed>
+    // Try to parse arguments and return value after resumed>
     if let Some(pos) = input.find("resumed>") {
-        let after_resumed = &input[pos + 8..];
+        let after_resumed = &input[pos + 8..].trim_start();
 
-        // Skip any remaining arguments
-        if let Some(eq_pos) = after_resumed.find('=') {
-            let ret_part = &after_resumed[eq_pos..];
-            if let Ok((rest, ret_val)) = parse_return_value(ret_part) {
-                entry.return_value = ret_val;
+        // Look for the return value pattern ") =" and fallback to just "=" if ") =" is not found.
+        let ret_part = if let Some(ret_start) = after_resumed.find(") =") {
+            // Everything before ") =" is the resumed arguments
+            let args_part = &after_resumed[..ret_start + 1]; // Include the closing ")"
+            entry.arguments = args_part.trim().to_string();
 
-                // Parse errno if present
-                if let Some(ref ret) = entry.return_value
-                    && ret.starts_with("-1")
-                    && let Ok((_, errno)) = parse_errno(rest)
-                {
-                    entry.errno = Some(errno);
-                }
+            Some(&after_resumed[ret_start + 1..])
+        } else {
+            after_resumed
+                .find('=')
+                .map(|eq_pos| &after_resumed[eq_pos..])
+        };
 
-                // Parse duration
-                if let Ok((_, duration)) = parse_duration(rest) {
-                    entry.duration = Some(duration);
-                }
+        if let Some(ret_part) = ret_part
+            && let Ok((rest, ret_val)) = parse_return_value(ret_part)
+        {
+            entry.return_value = ret_val;
+
+            // Parse errno if present
+            if let Some(ref ret) = entry.return_value
+                && ret.starts_with("-1")
+                && let Ok((_, errno)) = parse_errno(rest)
+            {
+                entry.errno = Some(errno);
+            }
+
+            // Parse duration
+            if let Ok((_, duration)) = parse_duration(rest) {
+                entry.duration = Some(duration);
             }
         }
     }
@@ -513,5 +525,18 @@ mod tests {
         assert_eq!(entry.syscall_name, "exit");
         assert!(entry.exit_info.is_some());
         assert_eq!(entry.exit_info.unwrap().code, 0);
+    }
+
+    #[test]
+    fn test_parse_clone3_resumed_with_extra_output() {
+        // clone3 has special output format: => {parent_tid=[PID]}, size) = PID
+        let line = "7193  11:52:10.217868 <... clone3 resumed> => {parent_tid=[7197]}, 88) = 7197";
+        let entry = parse_strace_line(line).unwrap();
+
+        assert_eq!(entry.pid, 7193);
+        assert_eq!(entry.timestamp, "11:52:10.217868");
+        assert_eq!(entry.syscall_name, "clone3");
+        assert_eq!(entry.return_value, Some("7197".to_string()));
+        assert!(entry.is_resumed);
     }
 }
