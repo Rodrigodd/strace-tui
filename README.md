@@ -27,7 +27,7 @@ https://github.com/user-attachments/assets/a190090e-1e30-4692-9a20-5b2315cb7634
 Currently can only be installed from source:
 
 ```bash
-cargo install --git https://github.com/Rodrigodd/trace-tui.git
+cargo install --git https://github.com/Rodrigodd/strace-tui.git
 ```
 
 ## Usage
