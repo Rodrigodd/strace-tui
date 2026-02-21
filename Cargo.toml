@@ -1,7 +1,10 @@
 [package]
 name = "strace-tui"
-version = "0.1.0"
+version = "1.0.0"
+description = " A terminal user interface (TUI) for visualizing and exploring strace output."
 edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Rodrigodd/strace-tui"
 
 [lib]
 name = "strace_tui"

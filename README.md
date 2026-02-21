@@ -24,10 +24,18 @@ https://github.com/user-attachments/assets/a190090e-1e30-4692-9a20-5b2315cb7634
 
 ## Installation
 
-Currently can only be installed from source:
+At the moment, the easiest way to install is via Cargo:
 
 ```bash
-cargo install --git https://github.com/Rodrigodd/strace-tui.git
+cargo install strace-tui
+```
+
+Can also be installed from source:
+
+```bash
+git clone https://github.com/Rodrigodd/strace-tui.git
+cd strace-tui
+cargo install --path .
 ```
 
 ## Usage
