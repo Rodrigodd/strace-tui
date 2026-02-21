@@ -127,19 +127,17 @@ impl StraceParser {
                                 ));
                                 current_entry = Some(entry);
                             }
+                        } else if let Some(unfinished_idx) = self.unfinished.remove(&entry.pid) {
+                            let mut resumed_entry = entry;
+                            resumed_entry.unfinished_entry_idx = Some(unfinished_idx);
+
+                            // Update unfinished entry with link to resumed
+                            entries[unfinished_idx].resumed_entry_idx = Some(entries.len());
+
+                            current_entry = Some(resumed_entry);
                         } else {
-                            if let Some(unfinished_idx) = self.unfinished.remove(&entry.pid) {
-                                let mut resumed_entry = entry;
-                                resumed_entry.unfinished_entry_idx = Some(unfinished_idx);
-
-                                // Update unfinished entry with link to resumed
-                                entries[unfinished_idx].resumed_entry_idx = Some(entries.len());
-
-                                current_entry = Some(resumed_entry);
-                            } else {
-                                // Resumed without unfinished - just store as-is
-                                current_entry = Some(entry);
-                            }
+                            // Resumed without unfinished - just store as-is
+                            current_entry = Some(entry);
                         }
                     } else {
                         current_entry = Some(entry);
