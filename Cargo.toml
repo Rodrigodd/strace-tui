@@ -20,18 +20,28 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 clap = { version = "4.5.60", features = ["derive"] }
 thiserror = "2.0.18"
-tempfile = "3.25.0"
-addr2line = "0.26.0"
+tempfile = "3.26.0"
+addr2line = { version = "0.26.0", default-features = false, features = [
+    "loader",
+    "cpp_demangle",
+    "rustc-demangle",
+    "smallvec",
+] }
 
 # TUI
-ratatui = "0.30.0"
+ratatui = { version = "0.30.0", default-features = false, features = [
+    "crossterm",
+    "layout-cache",
+] }
 crossterm = "0.29.0"
 
 # Logging
 log = "0.4.29"
-env_logger = "0.11.9"
-dirs = "6.0.0"
+env_logger = { version = "0.11.9", default-features = false }
+dirs = "6.0"
 
-[dev-dependencies]
-pretty_assertions = "1.4.1"
-tempfile = "3.25.0"
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

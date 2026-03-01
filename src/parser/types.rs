@@ -1,7 +1,10 @@
-use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use serde::Deserialize;
+use serde::Serialize;
 
 /// A single syscall entry from strace output
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct SyscallEntry {
     /// Process ID
     pub pid: u32,
@@ -49,7 +52,8 @@ pub struct SyscallEntry {
 }
 
 /// Error information from a failed syscall
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct Errno {
     /// Error code (e.g., "ENOENT")
     pub code: String,
@@ -59,7 +63,8 @@ pub struct Errno {
 }
 
 /// A single stack frame from the backtrace
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct BacktraceFrame {
     /// Binary/library path
     pub binary: String,
@@ -78,7 +83,8 @@ pub struct BacktraceFrame {
 }
 
 /// A resolved frame (can be inlined)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct ResolvedFrame {
     /// Function name (demangled)
     pub function: String,
@@ -97,7 +103,8 @@ pub struct ResolvedFrame {
 }
 
 /// Signal delivery information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct SignalInfo {
     /// Signal name (e.g., "SIGCHLD")
     pub signal_name: String,
@@ -107,7 +114,8 @@ pub struct SignalInfo {
 }
 
 /// Process exit information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct ExitInfo {
     /// Exit code
     pub code: i32,
@@ -139,7 +147,8 @@ impl SyscallEntry {
 }
 
 /// Output format containing all parsed data
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct StraceOutput {
     /// All syscall entries
     pub entries: Vec<SyscallEntry>,
@@ -152,7 +161,8 @@ pub struct StraceOutput {
 }
 
 /// Summary statistics about the trace
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct SummaryStats {
     /// Total number of syscalls
     pub total_syscalls: usize,
@@ -174,7 +184,8 @@ pub struct SummaryStats {
 }
 
 /// Information about a parse error
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct ParseErrorInfo {
     /// Line number where error occurred
     pub line_number: usize,
