@@ -1,6 +1,6 @@
 [package]
 name = "strace-tui"
-version = "1.0.0"
+version = "1.0.1"
 description = " A terminal user interface (TUI) for visualizing and exploring strace output."
 edition = "2024"
 license = "MIT OR Apache-2.0"
