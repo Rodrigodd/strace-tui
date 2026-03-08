@@ -586,12 +586,13 @@ impl App {
             return;
         }
 
+        let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
         match event.code {
             // Quit
             KeyCode::Char('q') | KeyCode::Char('Q') => {
                 self.should_quit = true;
             }
-            KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('c') if ctrl => {
                 self.should_quit = true;
             }
 
@@ -612,6 +613,12 @@ impl App {
             }
 
             // Navigation
+            KeyCode::Up | KeyCode::Char('k') if ctrl => {
+                self.move_prev_entry();
+            }
+            KeyCode::Down | KeyCode::Char('j') if ctrl => {
+                self.move_next_entry();
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.move_up();
             }
@@ -684,6 +691,106 @@ impl App {
         self.last_collapsed_scroll = None;
         if self.selected_line + 1 < self.display_lines.len() {
             self.selected_line += 1;
+        }
+    }
+
+    /// Move to the previous visible syscall entry made by the same PID as the currently selected
+    /// entry. If already on the first entry for that PID, do nothing.
+    fn move_prev_entry(&mut self) {
+        let Some(current_pid) = self
+            .display_lines
+            .get(self.selected_line)
+            .and_then(|line| self.entries.get(line.entry_idx()).map(|entry| entry.pid))
+        else {
+            log::error!(
+                "Select line {} is out of bounds or has no corresponding entry",
+                self.selected_line
+            );
+            debug_assert!(
+                false,
+                "Selected line {} is invalid during move_prev_entry",
+                self.selected_line
+            );
+            return;
+        };
+
+        let mut pos = self.selected_line;
+
+        // find the entry header
+        while pos > 0 {
+            if let Some(line) = self.display_lines.get(pos)
+                && let DisplayLine::SyscallHeader { .. } = line
+            {
+                break;
+            }
+            pos -= 1;
+        }
+
+        pos = pos.saturating_sub(1);
+
+        while pos > 0 {
+            if let Some(line) = self.display_lines.get(pos)
+                && let DisplayLine::SyscallHeader { .. } = line
+                && let Some(entry) = self.entries.get(line.entry_idx())
+            {
+                if entry.pid == current_pid {
+                    self.last_collapsed_position = None;
+                    self.last_collapsed_scroll = None;
+                    self.selected_line = pos;
+                    return;
+                }
+            }
+            pos -= 1;
+        }
+    }
+
+    /// Move to the next visible syscall entry made by the same PID as the currently selected
+    /// entry. If already on the last entry for that PID, do nothing.
+    fn move_next_entry(&mut self) {
+        let Some(current_pid) = self
+            .display_lines
+            .get(self.selected_line)
+            .and_then(|line| self.entries.get(line.entry_idx()).map(|entry| entry.pid))
+        else {
+            log::error!(
+                "Select line {} is out of bounds or has no corresponding entry",
+                self.selected_line
+            );
+            debug_assert!(
+                false,
+                "Selected line {} is invalid during move_next_entry",
+                self.selected_line
+            );
+            return;
+        };
+
+        let mut pos = self.selected_line;
+
+        // find the entry header
+        while pos > 0 {
+            if let Some(line) = self.display_lines.get(pos)
+                && let DisplayLine::SyscallHeader { .. } = line
+            {
+                break;
+            }
+            pos -= 1;
+        }
+
+        pos += 1;
+
+        while pos < self.display_lines.len() {
+            if let Some(line) = self.display_lines.get(pos)
+                && let DisplayLine::SyscallHeader { .. } = line
+                && let Some(entry) = self.entries.get(line.entry_idx())
+            {
+                if entry.pid == current_pid {
+                    self.last_collapsed_position = None;
+                    self.last_collapsed_scroll = None;
+                    self.selected_line = pos;
+                    return;
+                }
+            }
+            pos = pos.saturating_add(1);
         }
     }
 

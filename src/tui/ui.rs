@@ -719,7 +719,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let mut footer_text = String::from(
-        "↑↓/jk: Nav | ←→: Fold | Enter: Toggle | e/c: All | h: Hide | H: Filter | .: Ghost | q: Quit | ?: Help",
+        "?: Help | q: Quit | [Ctrl+] ↑↓/jk: Nav | ←→: Fold | Enter: Toggle | e/c: All | h: Hide | H: Filter | .: Ghost",
     );
 
     // Add filter status
@@ -775,6 +775,8 @@ fn draw_help(f: &mut Frame) {
         )),
         Line::from("  ↑/k         Move up one line"),
         Line::from("  ↓/j         Move down one line"),
+        Line::from("  Ctrl+↑/k    Previous with same PID"),
+        Line::from("  Ctrl+↓/j    Next with same PID"),
         Line::from("  PageUp      Scroll up one page"),
         Line::from("  PageDown    Scroll down one page"),
         Line::from("  Ctrl+U      Scroll up half page"),
