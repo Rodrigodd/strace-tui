@@ -239,7 +239,12 @@ impl ProcessGraph {
                 } else if col > min_col && col < max_col {
                     graph.push(('─', col_color));
                 } else if col == child_column {
-                    graph.push(('┐', col_color));
+                    let c = if child_column > current_column {
+                        '┐'
+                    } else {
+                        '┌'
+                    };
+                    graph.push((c, col_color));
                 } else if self.is_active_at(col, entry_idx) {
                     graph.push(('│', col_color));
                 } else {
