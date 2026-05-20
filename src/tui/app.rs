@@ -640,10 +640,8 @@ impl App {
             KeyCode::Home | KeyCode::Char('g') => {
                 self.selected_line = 0;
             }
-            KeyCode::End | KeyCode::Char('G') => {
-                if !self.display_lines.is_empty() {
-                    self.selected_line = self.display_lines.len() - 1;
-                }
+            KeyCode::End | KeyCode::Char('G') if !self.display_lines.is_empty() => {
+                self.selected_line = self.display_lines.len() - 1;
             }
 
             // Expand/Collapse
@@ -732,13 +730,12 @@ impl App {
             if let Some(line) = self.display_lines.get(pos)
                 && let DisplayLine::SyscallHeader { .. } = line
                 && let Some(entry) = self.entries.get(line.entry_idx())
+                && entry.pid == current_pid
             {
-                if entry.pid == current_pid {
-                    self.last_collapsed_position = None;
-                    self.last_collapsed_scroll = None;
-                    self.selected_line = pos;
-                    return;
-                }
+                self.last_collapsed_position = None;
+                self.last_collapsed_scroll = None;
+                self.selected_line = pos;
+                return;
             }
             pos -= 1;
         }
@@ -782,13 +779,12 @@ impl App {
             if let Some(line) = self.display_lines.get(pos)
                 && let DisplayLine::SyscallHeader { .. } = line
                 && let Some(entry) = self.entries.get(line.entry_idx())
+                && entry.pid == current_pid
             {
-                if entry.pid == current_pid {
-                    self.last_collapsed_position = None;
-                    self.last_collapsed_scroll = None;
-                    self.selected_line = pos;
-                    return;
-                }
+                self.last_collapsed_position = None;
+                self.last_collapsed_scroll = None;
+                self.selected_line = pos;
+                return;
             }
             pos = pos.saturating_add(1);
         }
@@ -1464,34 +1460,28 @@ impl App {
             KeyCode::Esc | KeyCode::Char('H') | KeyCode::Char('q') => {
                 self.close_filter_modal();
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.filter_modal_state.selected_index > 0 {
-                    self.filter_modal_state.selected_index -= 1;
+            KeyCode::Up | KeyCode::Char('k') if self.filter_modal_state.selected_index > 0 => {
+                self.filter_modal_state.selected_index -= 1;
 
-                    // Adjust scroll if needed
-                    if self.filter_modal_state.selected_index
-                        < self.filter_modal_state.scroll_offset
-                    {
-                        self.filter_modal_state.scroll_offset =
-                            self.filter_modal_state.selected_index;
-                    }
+                // Adjust scroll if needed
+                if self.filter_modal_state.selected_index < self.filter_modal_state.scroll_offset {
+                    self.filter_modal_state.scroll_offset = self.filter_modal_state.selected_index;
                 }
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down | KeyCode::Char('j')
                 if self.filter_modal_state.selected_index + 1
-                    < self.filter_modal_state.syscall_list.len()
-                {
-                    self.filter_modal_state.selected_index += 1;
+                    < self.filter_modal_state.syscall_list.len() =>
+            {
+                self.filter_modal_state.selected_index += 1;
 
-                    // Adjust scroll if needed
-                    let max_visible = self.filter_modal_state.scroll_offset + visible_height;
-                    if self.filter_modal_state.selected_index >= max_visible {
-                        self.filter_modal_state.scroll_offset = self
-                            .filter_modal_state
-                            .selected_index
-                            .saturating_sub(visible_height)
-                            + 1;
-                    }
+                // Adjust scroll if needed
+                let max_visible = self.filter_modal_state.scroll_offset + visible_height;
+                if self.filter_modal_state.selected_index >= max_visible {
+                    self.filter_modal_state.scroll_offset = self
+                        .filter_modal_state
+                        .selected_index
+                        .saturating_sub(visible_height)
+                        + 1;
                 }
             }
             KeyCode::PageUp => {
