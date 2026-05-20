@@ -19,6 +19,7 @@ pub fn run_tui(
     entries: Vec<crate::parser::SyscallEntry>,
     summary: crate::parser::SummaryStats,
     file_path: Option<String>,
+    syscall_filter: Option<String>,
 ) -> io::Result<()> {
     // Initialize logging to file only if RUST_LOG is set
     if std::env::var("RUST_LOG").is_ok() {
@@ -56,7 +57,7 @@ pub fn run_tui(
     let mut terminal = Terminal::new(backend)?;
 
     // Create app
-    let mut app = App::new(entries, summary, file_path);
+    let mut app = App::new(entries, summary, file_path, syscall_filter);
 
     // Run the main loop
     let res = run_app(&mut terminal, &mut app);

@@ -42,6 +42,10 @@ enum Commands {
         /// Merge resumed syscalls into unfinished syscalls
         #[arg(long)]
         merge_resumed: bool,
+
+        /// Syscall expression to filter (e.g., trace=open,read or !write)
+        #[arg(short = 'e', long = "expression", value_name = "EXPR")]
+        syscall_filter: Option<String>,
     },
 
     /// Run strace on a command and parse the output
@@ -74,6 +78,10 @@ enum Commands {
         #[arg(long)]
         merge_resumed: bool,
 
+        /// Syscall expression to filter (e.g., trace=open,read or !write)
+        #[arg(short = 'e', long = "expression", value_name = "EXPR")]
+        syscall_filter: Option<String>,
+
         /// Flags to pass to strace.
         #[arg(
             long,
@@ -95,11 +103,12 @@ fn main() {
             resolve,
             pretty,
             merge_resumed,
+            syscall_filter,
         } => {
             if json {
                 parse_file_json(&input, output, resolve, pretty, merge_resumed);
             } else {
-                parse_file_tui(&input, merge_resumed);
+                parse_file_tui(&input, merge_resumed, syscall_filter);
             }
         }
         Commands::Trace {
@@ -110,6 +119,7 @@ fn main() {
             pretty,
             trace_file,
             merge_resumed,
+            syscall_filter,
             strace_flags,
         } => {
             let is_temp = trace_file.is_none();
@@ -118,7 +128,7 @@ fn main() {
             if json {
                 parse_file_json(&trace_path, output, resolve, pretty, merge_resumed);
             } else {
-                parse_file_tui(&trace_path, merge_resumed);
+                parse_file_tui(&trace_path, merge_resumed, syscall_filter);
             }
 
             if is_temp {
@@ -129,7 +139,7 @@ fn main() {
     }
 }
 
-fn parse_file_tui(input: &str, merge_resumed: bool) {
+fn parse_file_tui(input: &str, merge_resumed: bool, syscall_filter: Option<String>) {
     // Parse the strace output
     let mut parser = StraceParser::new();
     let entries = match parser.parse_file(input, merge_resumed) {
@@ -149,7 +159,7 @@ fn parse_file_tui(input: &str, merge_resumed: bool) {
     let summary = generate_summary(&entries);
 
     // Run TUI
-    if let Err(e) = tui::run_tui(entries, summary, Some(input.to_string())) {
+    if let Err(e) = tui::run_tui(entries, summary, Some(input.to_string()), syscall_filter) {
         eprintln!("TUI error: {}", e);
         std::process::exit(1);
     }

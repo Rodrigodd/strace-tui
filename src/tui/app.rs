@@ -172,6 +172,7 @@ impl App {
         entries: Vec<SyscallEntry>,
         summary: SummaryStats,
         file_path: Option<String>,
+        syscall_filter: Option<String>,
     ) -> Self {
         let process_graph = ProcessGraph::build(&entries);
 
@@ -188,6 +189,39 @@ impl App {
         let mut syscall_list: Vec<(String, usize)> = syscall_counts.into_iter().collect();
         syscall_list.sort_by(|a, b| a.0.cmp(&b.0)); // Sort by name
 
+        let mut hidden_syscalls = HashSet::new();
+
+        // Apply initial syscall filter if provided
+        if let Some(filter_expr) = syscall_filter {
+            let mut expr = filter_expr.as_str();
+            if let Some(stripped) = expr.strip_prefix("trace=") {
+                expr = stripped;
+            }
+
+            let is_exclusive = expr.starts_with('!');
+            let syscall_names: HashSet<&str> = if is_exclusive {
+                expr[1..].split(',').collect()
+            } else {
+                expr.split(',').collect()
+            };
+
+            if is_exclusive {
+                // Hide all syscalls IN the list
+                for (name, _) in &syscall_list {
+                    if syscall_names.contains(name.as_str()) {
+                        hidden_syscalls.insert(name.clone());
+                    }
+                }
+            } else {
+                // Hide all syscalls NOT IN the list
+                for (name, _) in &syscall_list {
+                    if !syscall_names.contains(name.as_str()) {
+                        hidden_syscalls.insert(name.clone());
+                    }
+                }
+            }
+        }
+
         let mut app = Self {
             entries,
             resolver: Addr2LineResolver::new(),
@@ -203,7 +237,7 @@ impl App {
             last_visible_height: 20, // Default, will be updated on first draw
             last_collapsed_position: None,
             last_collapsed_scroll: None,
-            hidden_syscalls: HashSet::new(),
+            hidden_syscalls,
             show_hidden: false,
             show_filter_modal: false,
             filter_modal_state: FilterModalState {
