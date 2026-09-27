@@ -8,12 +8,13 @@ https://github.com/user-attachments/assets/a190090e-1e30-4692-9a20-5b2315cb7634
 
 **Supported features:**
 
-- Parses common strace output and flags (`-tt -k -f -s 1024`) (also provides JSON output of parsed traces).
+- Parses common strace output and flags (`-tt -k -f -yy -s 1024`) (also provides JSON output of parsed traces).
 - Color-code syscall by type and error status.
 - Allow dynamically filtering and search syscalls.
 - Resolve strace stack-trace output (`strace -k`) to function names and source lines using `addr2line`.
 - Visualize multithreaded and multiprocess traces with a graph for forks and clones.
 - Search text in syscall arguments and results.
+- List every file, pipe and socket touched by the trace, following fds across dup, fork and exec (best with `strace -yy`).
 
 **Missing features:**
 
@@ -43,7 +44,7 @@ cargo install --path .
 ### Parse an existing strace file (TUI)
 
 ```bash
-strace -o trace.txt -tt -k -f -s 1024 ls -la
+strace -o trace.txt -tt -k -f -yy -s 1024 ls -la
 strace-tui parse trace.txt
 ```
 

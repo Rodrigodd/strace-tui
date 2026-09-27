@@ -164,6 +164,10 @@ pub struct StraceOutput {
 
     /// Parse errors encountered
     pub errors: Vec<ParseErrorInfo>,
+
+    /// Files, pipes, sockets and other resources touched by the trace
+    #[cfg_attr(test, serde(skip_deserializing))]
+    pub files: Vec<super::FileResource>,
 }
 
 /// Summary statistics about the trace

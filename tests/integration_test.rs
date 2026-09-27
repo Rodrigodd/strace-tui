@@ -288,3 +288,70 @@ fn test_cli_trace_subcommand() {
     let syscall_count = parsed["summary"]["total_syscalls"].as_u64().unwrap();
     assert!(syscall_count > 0, "Should trace at least one syscall");
 }
+
+#[test]
+fn test_cli_json_files() {
+    use pretty_assertions::assert_eq;
+    use std::process::Command;
+
+    let sample = r#"100 10:20:30 openat(AT_FDCWD</home>, "notes.txt", O_RDONLY|O_CLOEXEC) = 3</home/notes.txt> <0.000010>
+100 10:20:31 read(3</home/notes.txt>, "hello", 4096) = 5 <0.000010>
+100 10:20:32 close(3</home/notes.txt>) = 0 <0.000010>
+100 10:20:33 stat("/missing", 0x7fff) = -1 ENOENT (No such file or directory) <0.000010>
+100 10:20:34 +++ exited with 0 +++
+"#;
+
+    let mut temp_file = NamedTempFile::new().unwrap();
+    temp_file.write_all(sample.as_bytes()).unwrap();
+    let temp_path = temp_file.path().to_str().unwrap();
+
+    Command::new("cargo")
+        .args(["build", "--quiet"])
+        .status()
+        .expect("Failed to build");
+
+    let output = Command::new("./target/debug/strace-tui")
+        .args(["parse", temp_path, "--json"])
+        .output()
+        .expect("Failed to run parse command");
+    assert!(output.status.success(), "parse command should succeed");
+
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("Output should be valid JSON");
+
+    assert_eq!(
+        parsed["files"],
+        serde_json::json!([
+            {
+                "name": "/home/notes.txt",
+                "kind": "file",
+                "first_entry_idx": 0,
+                "lifetimes": [{
+                    "open_entry_idx": 0,
+                    "flags": "O_RDONLY|O_CLOEXEC",
+                    "aliases": [{"pid": 100, "fd": 3}],
+                    "end": {"kind": "closed", "entry_idx": 2},
+                    "accesses": [
+                        {"entry_idx": 0, "pid": 100, "fd": 3},
+                        {"entry_idx": 1, "pid": 100, "fd": 3},
+                        {"entry_idx": 2, "pid": 100, "fd": 3},
+                    ],
+                    "stats": {"calls": 3, "errors": 0, "bytes_read": 5, "bytes_written": 0},
+                }],
+                "path_accesses": [],
+                "stats": {"calls": 3, "errors": 0, "bytes_read": 5, "bytes_written": 0},
+                "pids": [100],
+            },
+            {
+                "name": "/missing",
+                "kind": "file",
+                "first_entry_idx": 3,
+                "lifetimes": [],
+                "path_accesses": [{"entry_idx": 3, "pid": 100}],
+                "stats": {"calls": 1, "errors": 1, "bytes_read": 0, "bytes_written": 0},
+                "pids": [100],
+            },
+        ])
+    );
+    assert_eq!(parsed["entries"][0]["return_annotation"], "/home/notes.txt");
+}

@@ -86,7 +86,7 @@ enum Commands {
         #[arg(
             long,
             value_name = "STRACE_ARGS",
-            default_value = "-tt -T -k -f -s 1024"
+            default_value = "-tt -T -k -f -yy -s 1024"
         )]
         strace_flags: String,
     },
@@ -275,10 +275,13 @@ fn output_results(
         })
         .collect();
 
+    let files = parser::analyze_files(&entries).resources;
+
     let output = StraceOutput {
         entries,
         summary,
         errors: error_info,
+        files,
     };
 
     // Serialize to JSON
