@@ -197,22 +197,14 @@ impl ProcessGraph {
 
         // Check if this is a wait that completes
         let is_wait = Self::is_wait_syscall(&entry.syscall_name);
-        // For wait, try return value first, then fall back to first argument (the PID waited for)
+        // For wait, use the return value (the reaped PID). A non-positive return (e.g. WNOHANG
+        // with nothing to reap, or an error) means no process was reaped, so no merge is drawn.
         let waited_pid = if is_wait && !entry.is_unfinished {
             entry
                 .return_value
                 .as_ref()
                 .and_then(|ret| ret.trim().parse::<u32>().ok())
                 .filter(|&waited| waited > 0 && waited != pid)
-                .or_else(|| {
-                    // If return value not available, try parsing first argument
-                    entry
-                        .arguments
-                        .split(',')
-                        .next()
-                        .and_then(|arg| arg.trim().parse::<u32>().ok())
-                        .filter(|&waited| waited > 0 && waited != pid)
-                })
         } else {
             None
         };
