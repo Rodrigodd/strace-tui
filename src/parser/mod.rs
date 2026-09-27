@@ -1,8 +1,10 @@
+mod args;
 mod backtrace_parser;
 mod line_parser;
 mod resolver;
 mod types;
 
+pub use args::*;
 pub use backtrace_parser::parse_backtrace_line;
 pub use line_parser::parse_strace_line;
 pub use resolver::Addr2LineResolver;
@@ -112,7 +114,10 @@ impl StraceParser {
                         if merge_resumed {
                             if let Some(unfinished_idx) = self.unfinished.remove(&entry.pid) {
                                 let unfinished = entries.get_mut(unfinished_idx).unwrap();
+                                unfinished.arguments =
+                                    merge_arguments(&unfinished.arguments, &entry.arguments);
                                 unfinished.return_value = entry.return_value;
+                                unfinished.return_annotation = entry.return_annotation;
                                 unfinished.errno = entry.errno;
                                 unfinished.duration = entry.duration;
                                 unfinished.is_resumed = false;

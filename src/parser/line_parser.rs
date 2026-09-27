@@ -7,6 +7,7 @@ use nom::{
     sequence::{delimited, preceded, terminated},
 };
 
+use super::args::{annotation_end, is_annotation_start, parse_annotation_suffix};
 use super::{Errno, ExitInfo, ParseError, ParseResult, SignalInfo, SyscallEntry};
 
 /// Parse a complete strace line
@@ -49,15 +50,18 @@ pub fn parse_strace_line(line: &str) -> ParseResult<SyscallEntry> {
     }
 
     // Parse return value and errno
-    let (rest, return_val) = parse_return_value(rest).unwrap_or((rest, None));
+    let (rest, (return_val, annotation)) = parse_return_value(rest).unwrap_or((rest, (None, None)));
     entry.return_value = return_val;
+    entry.return_annotation = annotation;
 
+    let mut rest = rest;
     if let Some(ref ret) = entry.return_value
         && (ret.starts_with("-1") || ret.starts_with("?"))
     {
         // Try to parse errno
-        if let Ok((_, errno)) = parse_errno(rest) {
+        if let Ok((after, errno)) = parse_errno(rest) {
             entry.errno = Some(errno);
+            rest = after;
         }
     }
 
@@ -121,51 +125,47 @@ fn parse_arguments(input: &str) -> IResult<&str, String> {
     let (rest, _) = space0(input)?;
     let (rest, _) = char('(')(rest)?;
 
-    // Find matching closing paren, handling nested structures
-    // But stop early if we see <unfinished
-    let mut depth = 1;
-    let mut end_pos = 0;
-    let chars: Vec<char> = rest.chars().collect();
-    let rest_str = rest;
-
     // Check if this contains <unfinished
-    if rest_str.contains("<unfinished") {
-        // Find where <unfinished starts and treat that as end
-        if let Some(unfinished_pos) = rest_str.find("<unfinished") {
-            let args: String = rest_str[..unfinished_pos]
-                .trim_end_matches([',', ' '])
-                .to_string();
-            return Ok((rest_str.get(unfinished_pos..).unwrap_or(""), args));
-        }
+    if let Some(unfinished_pos) = rest.find("<unfinished") {
+        // Treat where <unfinished starts as the end
+        let args = rest[..unfinished_pos]
+            .trim_end_matches([',', ' '])
+            .to_string();
+        return Ok((&rest[unfinished_pos..], args));
     }
 
-    for (i, &c) in chars.iter().enumerate() {
-        match c {
-            '(' => depth += 1,
-            ')' => {
+    // Find matching closing paren, skipping strings and fd annotations
+    let bytes = rest.as_bytes();
+    let mut depth = 1;
+    let mut in_string = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 1,
+            b'"' => in_string = !in_string,
+            _ if in_string => {}
+            b'<' if is_annotation_start(bytes, i) => {
+                i = annotation_end(rest, i);
+                continue;
+            }
+            b'(' => depth += 1,
+            b')' => {
                 depth -= 1;
                 if depth == 0 {
-                    end_pos = i;
-                    break;
+                    return Ok((&rest[i + 1..], rest[..i].to_string()));
                 }
             }
             _ => {}
         }
+        i += 1;
     }
 
-    if depth != 0 {
-        // Unfinished or malformed
-        let args: String = chars.iter().collect();
-        return Ok(("", args));
-    }
-
-    let args: String = chars.iter().take(end_pos).collect();
-
-    Ok((rest.get(end_pos + 1..).unwrap_or(""), args))
+    // Unfinished or malformed
+    Ok(("", rest.to_string()))
 }
 
-/// Parse return value
-fn parse_return_value(input: &str) -> IResult<&str, Option<String>> {
+/// Parse return value, with its fd annotation if present (`= 3</etc/passwd>`)
+fn parse_return_value(input: &str) -> IResult<&str, (Option<String>, Option<String>)> {
     let (rest, _) = space0(input)?;
     let (rest, _) = char('=')(rest)?;
     let (rest, _) = space0(rest)?;
@@ -186,7 +186,18 @@ fn parse_return_value(input: &str) -> IResult<&str, Option<String>> {
     ))
     .parse(rest)?;
 
-    Ok((rest, Some(value.to_string())))
+    let mut annotation = None;
+    let mut rest = rest;
+    if rest.starts_with('<') {
+        let mut end = annotation_end(rest, 0);
+        if rest[end..].starts_with("(deleted)") {
+            end += "(deleted)".len();
+        }
+        annotation = parse_annotation_suffix(&rest[..end]).map(str::to_string);
+        rest = &rest[end..];
+    }
+
+    Ok((rest, (Some(value.to_string()), annotation)))
 }
 
 /// Parse errno information
@@ -196,10 +207,12 @@ fn parse_errno(input: &str) -> IResult<&str, Errno> {
 
     // Try to parse message in parentheses
     let mut message = String::new();
+    let mut rest = rest;
     if let Some(start) = rest.find('(')
         && let Some(end) = rest[start..].find(')')
     {
         message = rest[start + 1..start + end].to_string();
+        rest = &rest[start + end + 1..];
     }
 
     Ok((
@@ -265,16 +278,19 @@ fn parse_resumed_line(pid: u32, timestamp: String, input: &str) -> ParseResult<S
         };
 
         if let Some(ret_part) = ret_part
-            && let Ok((rest, ret_val)) = parse_return_value(ret_part)
+            && let Ok((rest, (ret_val, annotation))) = parse_return_value(ret_part)
         {
             entry.return_value = ret_val;
+            entry.return_annotation = annotation;
 
             // Parse errno if present
+            let mut rest = rest;
             if let Some(ref ret) = entry.return_value
                 && ret.starts_with("-1")
-                && let Ok((_, errno)) = parse_errno(rest)
+                && let Ok((after, errno)) = parse_errno(rest)
             {
                 entry.errno = Some(errno);
+                rest = after;
             }
 
             // Parse duration
@@ -359,6 +375,7 @@ fn parse_exit_line(line: &str) -> ParseResult<SyscallEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn test_parse_simple_syscall() {
@@ -556,5 +573,67 @@ mod tests {
         );
         assert_eq!(entry.return_value, Some("24983".to_string()));
         assert!(entry.is_resumed);
+    }
+
+    #[test]
+    fn test_parse_yy_return_annotation() {
+        let line = r#"8     18:43:56.367873 openat(AT_FDCWD</tmp/x>, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 4</etc/ld.so.cache> <0.000017>"#;
+        let entry = parse_strace_line(line).unwrap();
+
+        assert_eq!(
+            entry.arguments,
+            r#"AT_FDCWD</tmp/x>, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC"#
+        );
+        assert_eq!(entry.return_value.as_deref(), Some("4"));
+        assert_eq!(entry.return_annotation.as_deref(), Some("/etc/ld.so.cache"));
+        assert_eq!(entry.duration, Some(0.000017));
+    }
+
+    #[test]
+    fn test_parse_yy_arguments() {
+        let line = "8 18:43:56.374346 ioctl(0</dev/null<char 1:3>>, TCGETS2, 0x7fff8c99fdb0) = -1 ENOTTY (Inappropriate ioctl for device) <0.000015>";
+        let entry = parse_strace_line(line).unwrap();
+        assert_eq!(
+            entry.arguments,
+            "0</dev/null<char 1:3>>, TCGETS2, 0x7fff8c99fdb0"
+        );
+        assert_eq!(entry.errno.unwrap().code, "ENOTTY");
+        assert_eq!(entry.duration, Some(0.000015));
+
+        let line =
+            "8 18:43:56.379120 pipe2([4<pipe:[831100]>, 5<pipe:[831100]>], 0) = 0 <0.000019>";
+        let entry = parse_strace_line(line).unwrap();
+        assert_eq!(entry.arguments, "[4<pipe:[831100]>, 5<pipe:[831100]>], 0");
+        assert_eq!(entry.return_annotation, None);
+
+        let line = r#"7 sendto(4<UNIX-STREAM:[832181->832182]>, "hi)", 2, 0, NULL, 0) = 2"#;
+        let entry = parse_strace_line(line).unwrap();
+        assert_eq!(
+            entry.arguments,
+            r#"4<UNIX-STREAM:[832181->832182]>, "hi)", 2, 0, NULL, 0"#
+        );
+        assert_eq!(entry.return_value.as_deref(), Some("2"));
+
+        let line = r#"7 openat(AT_FDCWD</a(b>, "x", O_RDONLY) = 3</a(b/x)> <0.1>"#;
+        let entry = parse_strace_line(line).unwrap();
+        assert_eq!(entry.arguments, r#"AT_FDCWD</a(b>, "x", O_RDONLY"#);
+        assert_eq!(entry.return_annotation.as_deref(), Some("/a(b/x)"));
+        assert_eq!(entry.duration, Some(0.1));
+    }
+
+    #[test]
+    fn test_parse_yy_deleted_and_resumed() {
+        let line = r#"7 memfd_create("mm", MFD_CLOEXEC)   = 8</memfd:mm>(deleted) <0.000010>"#;
+        let entry = parse_strace_line(line).unwrap();
+        assert_eq!(entry.return_value.as_deref(), Some("8"));
+        assert_eq!(entry.return_annotation.as_deref(), Some("/memfd:mm"));
+        assert_eq!(entry.duration, Some(0.00001));
+
+        let line = "9 18:43:56.380328 <... dup2 resumed>) = 1<pipe:[831100]> <0.000061>";
+        let entry = parse_strace_line(line).unwrap();
+        assert!(entry.is_resumed);
+        assert_eq!(entry.return_value.as_deref(), Some("1"));
+        assert_eq!(entry.return_annotation.as_deref(), Some("pipe:[831100]"));
+        assert_eq!(entry.duration, Some(0.000061));
     }
 }

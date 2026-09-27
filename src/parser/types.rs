@@ -21,6 +21,11 @@ pub struct SyscallEntry {
     /// Return value (if available)
     pub return_value: Option<String>,
 
+    /// fd annotation of the return value (from strace -y), e.g. `/etc/passwd` for
+    /// `= 3</etc/passwd>`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_annotation: Option<String>,
+
     /// Error number and message (if syscall failed)
     pub errno: Option<Errno>,
 
@@ -133,6 +138,7 @@ impl SyscallEntry {
             syscall_name,
             arguments: String::new(),
             return_value: None,
+            return_annotation: None,
             errno: None,
             duration: None,
             backtrace: Vec::new(),

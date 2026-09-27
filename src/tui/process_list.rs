@@ -1,6 +1,7 @@
-use super::app::{App, SearchState, TreeElement, TreePrefix, split_arguments};
+use super::app::{App, SearchState, TreeElement, TreePrefix};
 use super::process_graph::ProcessGraph;
 use crate::parser::SyscallEntry;
+use crate::parser::split_arguments;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     style::{Color, Modifier, Style},

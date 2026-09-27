@@ -1,6 +1,7 @@
-use super::app::{App, FilterTab, SearchState, Tab, split_arguments};
+use super::app::{App, FilterTab, SearchState, Tab};
 use super::process_list::ProcessLineKind;
 use super::syscall_colors::syscall_category_color;
+use crate::parser::split_arguments;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Flex, Layout, Rect},

@@ -1,6 +1,6 @@
 use super::process_graph::ProcessGraph;
 use super::process_list::{ProcessAction, ProcessTabState};
-use crate::parser::{Addr2LineResolver, SummaryStats, SyscallEntry};
+use crate::parser::{Addr2LineResolver, SummaryStats, SyscallEntry, split_arguments};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use std::collections::HashSet;
@@ -2290,66 +2290,6 @@ impl App {
                 + 1;
         }
     }
-}
-
-/// Split arguments by comma, handling nested structures
-pub fn split_arguments(args: &str) -> Vec<String> {
-    let mut result = Vec::new();
-    let mut current = String::new();
-    let mut depth = 0; // Track nesting depth for (), {}, []
-    let mut in_string = false;
-    let mut escape_next = false;
-
-    for ch in args.chars() {
-        if escape_next {
-            current.push(ch);
-            escape_next = false;
-            continue;
-        }
-
-        match ch {
-            '\\' => {
-                escape_next = true;
-                current.push(ch);
-            }
-            '"' => {
-                in_string = !in_string;
-                current.push(ch);
-            }
-            '(' | '{' | '[' if !in_string => {
-                depth += 1;
-                current.push(ch);
-            }
-            ')' | '}' | ']' if !in_string => {
-                depth -= 1;
-                current.push(ch);
-            }
-            ',' if !in_string && depth == 0 => {
-                // Split point
-                let trimmed = current.trim().to_string();
-                if !trimmed.is_empty() {
-                    result.push(trimmed);
-                }
-                current.clear();
-            }
-            _ => {
-                current.push(ch);
-            }
-        }
-    }
-
-    // Don't forget the last argument
-    let trimmed = current.trim().to_string();
-    if !trimmed.is_empty() {
-        result.push(trimmed);
-    }
-
-    // If we couldn't parse any arguments, return the whole string
-    if result.is_empty() && !args.trim().is_empty() {
-        result.push(args.trim().to_string());
-    }
-
-    result
 }
 
 #[cfg(test)]
