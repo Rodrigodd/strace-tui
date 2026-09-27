@@ -1,4 +1,5 @@
 use super::app::{App, FilterTab, SearchState, Tab};
+use super::file_list::{FileCtx, FileLineKind, resource_style};
 use super::process_list::ProcessLineKind;
 use super::syscall_colors::syscall_category_color;
 use crate::parser::split_arguments;
@@ -37,6 +38,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Tab::Processes => {
             draw_process_list(f, app, chunks[2]);
             &app.process_tab.search_state
+        }
+        Tab::Files => {
+            draw_file_list(f, app, chunks[2]);
+            &app.files_tab.search_state
         }
     };
 
@@ -467,12 +472,16 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let args = split_arguments(&entry.arguments);
                 if let Some(arg) = args.get(*arg_idx) {
                     let prefix_str = App::tree_prefix_to_string(tree_prefix);
+                    let refs = resource_ref_spans(app, *entry_idx, Some(*arg_idx));
+                    let refs_len: usize = refs.iter().map(|s| s.content.chars().count()).sum();
                     let max_len = width.saturating_sub(prefix_str.len() + 1);
-                    let content = truncate(arg, max_len);
-                    Line::from(vec![
+                    let content = truncate(arg, max_len.saturating_sub(refs_len).max(max_len / 2));
+                    let mut spans = vec![
                         Span::styled(prefix_str, Style::default()),
                         Span::styled(content, Style::default().fg(Color::DarkGray)),
-                    ])
+                    ];
+                    spans.extend(refs);
+                    Line::from(spans)
                 } else {
                     continue;
                 }
@@ -498,10 +507,12 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 } else {
                     Color::Green
                 };
-                Line::from(vec![
+                let mut spans = vec![
                     Span::styled(prefix_str, Style::default()),
                     Span::styled(content, Style::default().fg(ret_color)),
-                ])
+                ];
+                spans.extend(resource_ref_spans(app, *entry_idx, None));
+                Line::from(spans)
             }
 
             DisplayLine::Error {
@@ -908,11 +919,165 @@ fn draw_process_list(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
+/// `  → name` for each resource an argument (or the return value, for `None`) refers to
+fn resource_ref_spans(app: &App, entry_idx: usize, arg_idx: Option<usize>) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut seen = Vec::new();
+    for r in app.files.refs(entry_idx) {
+        if r.arg_idx != arg_idx || seen.contains(&r.resource) {
+            continue;
+        }
+        seen.push(r.resource);
+        if let Some(resource) = app.files.resources.get(r.resource) {
+            spans.push(Span::styled("  → ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                resource.name.clone(),
+                resource_style(resource),
+            ));
+        }
+    }
+    spans
+}
+
+/// Truncate spans to fit in `available` characters
+fn fit_spans(spans: Vec<Span<'static>>, mut available: usize) -> Vec<Span<'static>> {
+    let mut fitted = Vec::new();
+    for span in spans {
+        if available == 0 {
+            break;
+        }
+        let len = span.content.chars().count();
+        if len <= available {
+            available -= len;
+            fitted.push(span);
+        } else {
+            fitted.push(Span::styled(
+                truncate_line(&span.content, available),
+                span.style,
+            ));
+            available = 0;
+        }
+    }
+    fitted
+}
+
+fn draw_file_list(f: &mut Frame, app: &mut App, area: Rect) {
+    app.sync_files_tab();
+    let tab = &mut app.files_tab;
+    let visible_height = area.height as usize;
+    tab.last_visible_height = visible_height;
+
+    if tab.selected_line >= tab.scroll_offset + visible_height {
+        tab.scroll_offset = tab.selected_line.saturating_sub(visible_height - 1);
+    } else if tab.selected_line < tab.scroll_offset {
+        tab.scroll_offset = tab.selected_line;
+    }
+
+    let tab = &app.files_tab;
+    let ctx = FileCtx {
+        files: &app.files,
+        entries: &app.entries,
+        hidden_syscalls: &app.hidden_syscalls,
+        hidden_pids: &app.process_tab.hidden_pids,
+    };
+    let graph = &app.process_graph;
+    let pid_color = |pid: u32| graph.get_color(pid);
+    let start = tab.scroll_offset;
+    let end = (tab.scroll_offset + visible_height).min(tab.display_lines.len());
+    let width = area.width as usize;
+
+    let mut items = Vec::new();
+    for line in &tab.display_lines[start..end] {
+        let arrow = |expanded: bool| if expanded { "▼" } else { "▶" };
+        let prefix = match (line.kind, tab.is_expanded(line)) {
+            (FileLineKind::Resource, Some(expanded)) => format!("{} ", arrow(expanded)),
+            (_, Some(expanded)) => format!(
+                "{}{} ",
+                App::tree_prefix_to_string_header(&line.tree_prefix),
+                arrow(expanded)
+            ),
+            (_, None) => App::tree_prefix_to_string(&line.tree_prefix),
+        };
+
+        let (mut left, mut right) = tab.line_spans(line, &ctx, &pid_color);
+        if line.is_ghost {
+            for span in left.iter_mut().chain(right.iter_mut()) {
+                span.style = Style::default().fg(Color::DarkGray);
+            }
+        }
+
+        let prefix_len = prefix.chars().count();
+        let right_len: usize = right.iter().map(|s| s.content.chars().count()).sum();
+        let available = width.saturating_sub(prefix_len);
+        // Keep the stats right-aligned, dropping them if the name would get too short
+        let (left_available, right) = if !right.is_empty() && available >= right_len + 2 + 20 {
+            (available - right_len - 2, right)
+        } else {
+            (available, Vec::new())
+        };
+        let left = fit_spans(left, left_available);
+        let left_len: usize = left.iter().map(|s| s.content.chars().count()).sum();
+
+        // A resource whose accesses all failed gets a red arrow, like its name
+        let prefix_style = match app.files.resources.get(line.resource) {
+            Some(resource)
+                if line.kind == FileLineKind::Resource
+                    && !line.is_ghost
+                    && resource.all_failed() =>
+            {
+                resource_style(resource)
+            }
+            _ => Style::default(),
+        };
+        let mut spans = vec![Span::styled(prefix, prefix_style)];
+        spans.extend(left);
+        if !right.is_empty() {
+            let padding = available.saturating_sub(left_len + right_len);
+            spans.push(Span::raw(" ".repeat(padding)));
+            spans.extend(right);
+        }
+        let content = Line::from(spans);
+
+        let item = if line.is_search_match {
+            ListItem::new(content).style(Style::default().bg(Color::Rgb(60, 60, 0)))
+        } else {
+            ListItem::new(content)
+        };
+        items.push(item);
+    }
+
+    let list = List::new(items).highlight_style(
+        Style::default()
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    let mut state = ratatui::widgets::ListState::default();
+    if tab.selected_line >= start && tab.selected_line < end {
+        state.select(Some(tab.selected_line - start));
+    }
+
+    f.render_stateful_widget(list, area, &mut state);
+}
+
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    if app.active_tab == Tab::Files {
+        let mut footer_text = String::from(
+            "?: Help | q: Quit | 1-3: Tab | ↑↓/jk: Nav | ←→: Fold | Enter: Toggle/Jump | e/c: All | .: Ghost | /: Search",
+        );
+        footer_text.push_str(&format!(" | Files: {}", app.files.resources.len()));
+        if app.files_tab.show_hidden {
+            footer_text.push_str(" (hidden shown)");
+        }
+        let footer = Paragraph::new(footer_text).style(Style::default().fg(Color::DarkGray));
+        f.render_widget(footer, area);
+        return;
+    }
+
     if app.active_tab == Tab::Processes {
         let tab = &app.process_tab;
         let mut footer_text = String::from(
-            "?: Help | q: Quit | 1/2: Tab | ↑↓/jk: Nav | ←→: Fold | Enter: Toggle/Jump | e/c: All | h: Hide | H: Filter | .: Ghost",
+            "?: Help | q: Quit | 1-3: Tab | ↑↓/jk: Nav | ←→: Fold | Enter: Toggle/Jump | e/c: All | h: Hide | H: Filter | .: Ghost",
         );
         if !tab.hidden_pids.is_empty() {
             footer_text.push_str(&format!(" | Hidden: {}", tab.hidden_pids.len()));
@@ -926,7 +1091,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let mut footer_text = String::from(
-        "?: Help | q: Quit | 1/2: Tab | [Ctrl+] ↑↓/jk: Nav | ←→: Fold | Enter: Toggle | e/c: All | h/p: Hide | H: Filter | .: Ghost",
+        "?: Help | q: Quit | 1-3: Tab | [Ctrl+] ↑↓/jk: Nav | ←→: Fold | Enter: Toggle/Jump | e/c: All | h/p: Hide | H: Filter | .: Ghost",
     );
 
     // Add filter status
@@ -1045,9 +1210,10 @@ fn draw_help(f: &mut Frame) {
             "Tabs:",
             Style::default().add_modifier(Modifier::UNDERLINED),
         )),
-        Line::from("  1/2         Syscalls/Processes tab"),
+        Line::from("  1/2/3       Syscalls/Processes/Files"),
         Line::from("  Click       Switch to clicked tab"),
         Line::from("  Enter       Jump to syscall/process"),
+        Line::from("  Enter (arg) Jump to its file"),
         Line::from(""),
         Line::from(Span::styled(
             "Press ? or Esc to close help",

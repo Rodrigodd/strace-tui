@@ -1,6 +1,10 @@
+use super::file_list::{FileAction, FileCtx, FileTabState};
 use super::process_graph::ProcessGraph;
 use super::process_list::{ProcessAction, ProcessTabState};
-use crate::parser::{Addr2LineResolver, SummaryStats, SyscallEntry, split_arguments};
+use crate::parser::{
+    Addr2LineResolver, FileAnalysis, ResourceRef, SummaryStats, SyscallEntry, analyze_files,
+    split_arguments,
+};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use std::collections::HashSet;
@@ -16,15 +20,17 @@ pub enum HideTarget {
 pub enum Tab {
     Syscalls,
     Processes,
+    Files,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 2] = [Tab::Syscalls, Tab::Processes];
+    pub const ALL: [Tab; 3] = [Tab::Syscalls, Tab::Processes, Tab::Files];
 
     pub fn title(self) -> &'static str {
         match self {
             Tab::Syscalls => "1 Syscalls",
             Tab::Processes => "2 Processes",
+            Tab::Files => "3 Files",
         }
     }
 }
@@ -187,6 +193,8 @@ pub struct App {
     pub summary: SummaryStats,
     pub file_path: Option<String>,
     pub process_graph: ProcessGraph,
+    /// Files, pipes, sockets, ... touched by the trace
+    pub files: FileAnalysis,
 
     // UI State
     pub display_lines: Vec<DisplayLine>,
@@ -212,6 +220,7 @@ pub struct App {
     // Tabs
     pub active_tab: Tab,
     pub process_tab: ProcessTabState,
+    pub files_tab: FileTabState,
     pub tab_hitboxes: Vec<(Rect, Tab)>, // Filled when drawing the tab bar
     pub modal_tab_hitboxes: Vec<(Rect, FilterTab)>, // Filled when drawing the filter modal
 
@@ -230,6 +239,13 @@ impl App {
     ) -> Self {
         let process_graph = ProcessGraph::build(&entries);
         let process_tab = ProcessTabState::new(&entries, &process_graph);
+        let files = analyze_files(&entries);
+        let files_tab = FileTabState::new(&FileCtx {
+            files: &files,
+            entries: &entries,
+            hidden_syscalls: &HashSet::new(),
+            hidden_pids: &HashSet::new(),
+        });
 
         // Build syscall list for filter modal
         let mut syscall_counts: std::collections::HashMap<String, usize> =
@@ -283,6 +299,7 @@ impl App {
             summary,
             file_path,
             process_graph,
+            files,
             display_lines: Vec::new(),
             selected_line: 0,
             scroll_offset: 0,
@@ -306,6 +323,7 @@ impl App {
             modal_search_state: SearchState::new(),
             active_tab: Tab::Syscalls,
             process_tab,
+            files_tab,
             tab_hitboxes: Vec::new(),
             modal_tab_hitboxes: Vec::new(),
             should_quit: false,
@@ -658,12 +676,75 @@ impl App {
             // Restore cursor screen position
             self.scroll_offset = self.selected_line.saturating_sub(cursor_screen_pos);
         }
+
+        // Hidden syscalls or processes may have changed
+        self.files_tab.dirty = true;
+    }
+
+    /// Run `f` with the Files tab state and what it needs from the app
+    fn with_files_tab<R>(&mut self, f: impl FnOnce(&mut FileTabState, &FileCtx) -> R) -> R {
+        let ctx = FileCtx {
+            files: &self.files,
+            entries: &self.entries,
+            hidden_syscalls: &self.hidden_syscalls,
+            hidden_pids: &self.process_tab.hidden_pids,
+        };
+        f(&mut self.files_tab, &ctx)
+    }
+
+    /// Rebuild the Files tab if hidden syscalls or processes changed since it was built
+    pub fn sync_files_tab(&mut self) {
+        if self.files_tab.dirty {
+            self.with_files_tab(|tab, ctx| tab.rebuild_display_lines(ctx));
+        }
+    }
+
+    /// Switch to the Files tab with the access of `entry_idx` to a resource selected
+    pub fn jump_to_file(&mut self, entry_idx: usize, resource_ref: ResourceRef) {
+        // Accesses of split syscalls are recorded on their first half
+        let access_idx = self
+            .entries
+            .get(entry_idx)
+            .and_then(|e| e.unfinished_entry_idx.filter(|_| e.is_resumed))
+            .unwrap_or(entry_idx);
+        self.sync_files_tab();
+        self.with_files_tab(|tab, ctx| {
+            tab.go_to_access(
+                ctx,
+                resource_ref.resource,
+                resource_ref.lifetime,
+                access_idx,
+            )
+        });
+        self.active_tab = Tab::Files;
+    }
+
+    /// Resources referenced by the selected argument or return value line
+    fn selected_resource_ref(&self) -> Option<(usize, ResourceRef)> {
+        let (entry_idx, arg_idx) = match self.display_lines.get(self.selected_line)? {
+            DisplayLine::ArgumentLine {
+                entry_idx, arg_idx, ..
+            } => (*entry_idx, Some(*arg_idx)),
+            DisplayLine::ReturnValue { entry_idx, .. } => (*entry_idx, None),
+            _ => return None,
+        };
+        let r = self
+            .files
+            .refs(entry_idx)
+            .iter()
+            .find(|r| r.arg_idx == arg_idx)?;
+        Some((entry_idx, *r))
     }
 
     pub fn handle_event(&mut self, event: KeyEvent) {
         // Priority 1: Search mode
         if self.active_tab == Tab::Processes && self.process_tab.search_state.active {
             self.process_tab.handle_key(event, &self.entries);
+            return;
+        }
+        if self.active_tab == Tab::Files && self.files_tab.search_state.active {
+            self.sync_files_tab();
+            self.with_files_tab(|tab, ctx| tab.handle_key(event, ctx));
             return;
         }
         if self.search_state.active {
@@ -709,7 +790,20 @@ impl App {
                 self.active_tab = Tab::Processes;
                 return;
             }
+            KeyCode::Char('3') => {
+                self.active_tab = Tab::Files;
+                return;
+            }
             _ => {}
+        }
+
+        if self.active_tab == Tab::Files {
+            self.sync_files_tab();
+            match self.with_files_tab(|tab, ctx| tab.handle_key(event, ctx)) {
+                FileAction::None => {}
+                FileAction::JumpToEntry(idx) => self.jump_to_entry(idx),
+            }
+            return;
         }
 
         if self.active_tab == Tab::Processes {
@@ -1052,6 +1146,12 @@ impl App {
 
     fn toggle_current_line(&mut self) {
         if self.selected_line >= self.display_lines.len() {
+            return;
+        }
+
+        // Arguments and return values referring to a file jump to it in the Files tab
+        if let Some((entry_idx, resource_ref)) = self.selected_resource_ref() {
+            self.jump_to_file(entry_idx, resource_ref);
             return;
         }
 

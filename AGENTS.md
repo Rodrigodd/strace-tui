@@ -29,6 +29,8 @@ src/
 │   ├── mod.rs           # Line-by-line orchestration, backtrace/unfinished handling
 │   ├── types.rs         # SyscallEntry and related types
 │   ├── line_parser.rs   # nom parser for a single strace line
+│   ├── args.rs          # Argument splitting, -y fd annotations, fd/path/array args
+│   ├── fd_tracker.rs    # analyze_files(): fd lifetimes and resources across the trace
 │   ├── backtrace_parser.rs  # ` > binary(func+off) [addr]` lines
 │   └── resolver.rs      # Backtrace resolution via addr2line crate, cached
 └── tui/
@@ -37,6 +39,7 @@ src/
     ├── ui.rs            # Rendering, help/filter modals
     ├── process_graph.rs # Process lifetime / fork / wait graph
     ├── process_list.rs  # Processes tab: per-PID summaries, own display lines/search
+    ├── file_list.rs     # Files tab: resource → fd lifetime → access tree
     └── syscall_colors.rs # Category-based syscall colors
 ```
 
@@ -46,7 +49,10 @@ Non-obvious details:
 - The TUI flattens everything into a `Vec<DisplayLine>` built by `rebuild_display_lines()`. Each line carries a `TreePrefix` for the │ ├ └ drawing.
 - `selected_line` indexes `display_lines`, not the syscall list.
 - Hidden syscalls (`hidden_syscalls`) are skipped unless `show_hidden` is on, which shows them as "ghost" lines.
-- Two tabs (`App::active_tab`, keys `1`/`2` or click): Syscalls uses the `App` fields above; Processes keeps its own state in `ProcessTabState` and returns `ProcessAction::JumpToEntry` for `App::jump_to_entry()`.
+- Three tabs (`App::active_tab`, keys `1`/`2`/`3` or click): Syscalls uses the `App` fields above; Processes and Files keep their own state in `ProcessTabState`/`FileTabState` and return `JumpToEntry` actions for `App::jump_to_entry()`.
+- `trace` runs strace with `-yy`, so fds are annotated like `3</etc/passwd>` or `4<pipe:[123]>`. The annotation of a return value goes to `SyscallEntry::return_annotation`. Use the `args.rs` helpers (`split_arguments`, `parse_fd_arg`, ...) instead of splitting arguments by hand, since annotations can contain `,`, `)` and `->`.
+- `analyze_files()` (in `App::files`, and `files` in JSON) follows fds through dup, fork/clone (shared with `CLONE_FILES`), close-on-exec and exit. A `FileAccess` points to the first half of an unfinished/resumed pair. `FileAnalysis::refs()` maps each entry's arguments (or return value, `arg_idx: None`) to resources, and Enter on them jumps to the Files tab.
+- The Files tab hides accesses of hidden syscalls/processes. `App::rebuild_display_lines()` marks it dirty, and `App::sync_files_tab()` rebuilds it lazily.
 - Hidden processes live in `ProcessTabState::hidden_pids` (each tab has its own ghost mode); the Syscalls tab checks them through `App::is_entry_hidden()`.
 
 ## Common Tasks

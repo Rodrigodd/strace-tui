@@ -1,4 +1,5 @@
 mod app;
+mod file_list;
 mod process_graph;
 mod process_list;
 mod syscall_colors;
