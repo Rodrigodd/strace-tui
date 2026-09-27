@@ -224,15 +224,20 @@ fn parse_errno(input: &str) -> IResult<&str, Errno> {
     ))
 }
 
-/// Parse duration in <0.000123> format
+/// Parse duration in <0.000123> format. It is always last on the line, possibly after
+/// an explanation of the return value, like `= 0 (Timeout) <0.000034>`.
 fn parse_duration(input: &str) -> IResult<&str, f64> {
-    let (rest, _) = space0(input)?;
+    let trimmed = input.trim_end();
+    let start = trimmed
+        .rfind('<')
+        .filter(|_| trimmed.ends_with('>'))
+        .unwrap_or(trimmed.len());
     let (rest, duration_str) = delimited(
         char('<'),
         recognize((opt(digit1), opt((char('.'), digit1)))),
         char('>'),
     )
-    .parse(rest)?;
+    .parse(&trimmed[start..])?;
 
     let duration = duration_str.parse().unwrap_or(0.0);
     Ok((rest, duration))
@@ -635,5 +640,18 @@ mod tests {
         assert_eq!(entry.return_value.as_deref(), Some("1"));
         assert_eq!(entry.return_annotation.as_deref(), Some("pipe:[831100]"));
         assert_eq!(entry.duration, Some(0.000061));
+    }
+
+    #[test]
+    fn test_parse_duration_after_return_explanation() {
+        let line =
+            "569 19:03:04.448248 fcntl(5</tmp/x>, F_GETFD) = 0x1 (flags FD_CLOEXEC) <0.000024>";
+        let entry = parse_strace_line(line).unwrap();
+        assert_eq!(entry.return_value.as_deref(), Some("0x1"));
+        assert_eq!(entry.duration, Some(0.000024));
+
+        let line = "569 poll([{fd=0, events=0}], 1, 0) = 0 (Timeout) <0.000034>";
+        let entry = parse_strace_line(line).unwrap();
+        assert_eq!(entry.duration, Some(0.000034));
     }
 }
