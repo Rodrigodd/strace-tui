@@ -1,5 +1,6 @@
 use super::app::{App, FilterTab, SearchState, Tab, split_arguments};
 use super::process_list::ProcessLineKind;
+use super::syscall_colors::syscall_category_color;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Flex, Layout, Rect},
@@ -175,7 +176,6 @@ fn format_syscall_name_spans(
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     use super::app::DisplayLine;
-    use super::syscall_colors::syscall_category_color;
 
     // Calculate scroll offset to keep selected item visible
     let visible_height = area.height as usize; // No borders, use full height
@@ -1144,8 +1144,18 @@ fn draw_filter_modal(f: &mut Frame, app: &mut App) {
                     let (name, count) = &modal_state.syscall_list[idx];
                     let is_hidden = app.hidden_syscalls.contains(name);
                     let checkbox = if is_hidden { "[ ]" } else { "[✓]" };
-                    let text = format!("{} {} ({} calls)", checkbox, name, count);
-                    (Line::from(text), is_hidden)
+                    // Color by category only for visible, non-highlighted rows
+                    let name_style = if is_hidden || is_match || is_current_match {
+                        Style::default()
+                    } else {
+                        Style::default().fg(syscall_category_color(name))
+                    };
+                    let line = Line::from(vec![
+                        Span::raw(format!("{} ", checkbox)),
+                        Span::styled(name.clone(), name_style),
+                        Span::raw(format!(" ({} calls)", count)),
+                    ]);
+                    (line, is_hidden)
                 }
                 FilterTab::Processes => {
                     let summary = &app.process_tab.summaries[idx];
