@@ -1,11 +1,13 @@
 mod args;
 mod backtrace_parser;
+mod fd_tracker;
 mod line_parser;
 mod resolver;
 mod types;
 
 pub use args::*;
 pub use backtrace_parser::parse_backtrace_line;
+pub use fd_tracker::*;
 pub use line_parser::parse_strace_line;
 pub use resolver::Addr2LineResolver;
 pub use types::*;
