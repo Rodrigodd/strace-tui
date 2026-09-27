@@ -784,10 +784,13 @@ fn draw_process_list(f: &mut Frame, app: &mut App, area: Rect) {
                 "▶"
             };
             let (label, dimmed) = tab.command_label(line.pid);
-            let label_color = if dimmed {
-                Color::DarkGray
+            // Color the row with the process's graph color, dimmed when it has no exec
+            let pid_color = app.process_graph.get_color(line.pid);
+            let row_style = Style::default().fg(pid_color);
+            let label_style = if dimmed {
+                row_style.add_modifier(Modifier::DIM)
             } else {
-                Color::White
+                row_style
             };
 
             let graph_chars = app.process_graph.render_process_start(line.pid);
@@ -813,7 +816,7 @@ fn draw_process_list(f: &mut Frame, app: &mut App, area: Rect) {
             let padding = width.saturating_sub(left.chars().count() + graph_len + metadata_len);
 
             let mut spans = vec![
-                Span::styled(left, Style::default().fg(label_color)),
+                Span::styled(left, label_style),
                 Span::raw(" ".repeat(padding)),
             ];
             if !graph_chars.is_empty() {
@@ -823,14 +826,8 @@ fn draw_process_list(f: &mut Frame, app: &mut App, area: Rect) {
                 }
                 spans.push(Span::raw("  "));
             }
-            spans.push(Span::styled(
-                metadata_pid,
-                Style::default().fg(app.process_graph.get_color(line.pid)),
-            ));
-            spans.push(Span::styled(
-                metadata_time,
-                Style::default().fg(Color::White),
-            ));
+            spans.push(Span::styled(metadata_pid, row_style));
+            spans.push(Span::styled(metadata_time, row_style));
             Line::from(spans)
         } else {
             // Collapsible section headers get an arrow in place of the horizontal branch

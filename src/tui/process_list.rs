@@ -3,7 +3,7 @@ use super::process_graph::ProcessGraph;
 use crate::parser::SyscallEntry;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::Span,
 };
 use std::collections::{HashMap, HashSet};
@@ -222,6 +222,8 @@ pub enum ProcessAction {
 pub struct ProcessTabState {
     pub summaries: Vec<ProcessSummary>,
     index_by_pid: HashMap<u32, usize>,
+    /// Each process's color in the process graph
+    colors: HashMap<u32, Color>,
     pub display_lines: Vec<ProcessLine>,
     pub selected_line: usize,
     pub scroll_offset: usize,
@@ -243,9 +245,14 @@ impl ProcessTabState {
             .enumerate()
             .map(|(i, s)| (s.pid, i))
             .collect();
+        let colors = summaries
+            .iter()
+            .map(|s| (s.pid, graph.get_color(s.pid)))
+            .collect();
         let mut state = Self {
             summaries,
             index_by_pid,
+            colors,
             display_lines: Vec::new(),
             selected_line: 0,
             scroll_offset: 0,
@@ -261,6 +268,37 @@ impl ProcessTabState {
 
     pub fn summary(&self, pid: u32) -> Option<&ProcessSummary> {
         self.index_by_pid.get(&pid).map(|&i| &self.summaries[i])
+    }
+
+    fn color(&self, pid: u32) -> Color {
+        self.colors.get(&pid).copied().unwrap_or(Color::White)
+    }
+
+    /// The command a process runs: its first successful exec, or else the command its parent
+    /// was running when it forked it (the last exec before the fork, going up the tree). The flag
+    /// is true when the command is inherited.
+    pub fn running_command(&self, pid: u32) -> Option<(String, bool)> {
+        let summary = self.summary(pid)?;
+        if let Some(exec) = summary.first_exec() {
+            return Some((exec.argv.clone(), false));
+        }
+
+        let mut fork_idx = summary.fork_entry_idx?;
+        let mut ancestor = self.summary(summary.parent_pid?)?;
+        // Bounded, in case of a cycle in bad data
+        for _ in 0..self.summaries.len() {
+            if let Some(exec) = ancestor
+                .execs
+                .iter()
+                .rev()
+                .find(|exec| exec.ok && exec.entry_idx < fork_idx)
+            {
+                return Some((exec.argv.clone(), true));
+            }
+            fork_idx = ancestor.fork_entry_idx?;
+            ancestor = self.summary(ancestor.parent_pid?)?;
+        }
+        None
     }
 
     /// Text for the collapsed row, and whether it should be dimmed (no exec)
@@ -502,11 +540,20 @@ impl ProcessTabState {
                 let Some(parent) = summary.parent_pid else {
                     return Vec::new();
                 };
+                // Same color as the parent's row, dimmed when it has no exec
                 let (cmd, dimmed) = self.command_label(parent);
+                let parent_style = Style::default().fg(self.color(parent));
                 let mut spans = vec![
                     Span::styled("Parent: ", label),
-                    Span::styled(format!("[{}] ", parent), value),
-                    Span::styled(cmd, if dimmed { dim } else { value }),
+                    Span::styled(format!("[{}] ", parent), parent_style),
+                    Span::styled(
+                        cmd,
+                        if dimmed {
+                            parent_style.add_modifier(Modifier::DIM)
+                        } else {
+                            parent_style
+                        },
+                    ),
                 ];
                 if let Some(parent_summary) = self.summary(parent)
                     && parent_summary.is_thread
@@ -608,16 +655,26 @@ impl ProcessTabState {
                 let Some(&child) = summary.children.get(i) else {
                     return Vec::new();
                 };
-                let mut spans = vec![Span::styled(format!("[{}] ", child), value)];
+                // Same color as the child's row, with an inherited command dimmed
+                let child_style = Style::default().fg(self.color(child));
+                let mut spans = vec![Span::styled(format!("[{}] ", child), child_style)];
                 if let Some(child_summary) = self.summary(child) {
-                    if child_summary.is_thread {
-                        spans.push(Span::styled("thread", dim));
+                    let kind = if child_summary.is_thread {
+                        "thread"
                     } else {
-                        spans.push(Span::styled("fork", dim));
-                    }
-                    if let Some(exec) = child_summary.first_exec() {
+                        "fork"
+                    };
+                    spans.push(Span::styled(kind, dim));
+                    if let Some((cmd, inherited)) = self.running_command(child) {
                         spans.push(Span::styled(": ", dim));
-                        spans.push(Span::styled(exec.argv.clone(), value));
+                        spans.push(Span::styled(
+                            cmd,
+                            if inherited {
+                                child_style.add_modifier(Modifier::DIM)
+                            } else {
+                                child_style
+                            },
+                        ));
                     }
                 }
                 spans
@@ -956,6 +1013,31 @@ mod tests {
         let (_, tab) = tab(&["200 10:00:00 fork() = 201", "201 10:00:00 getpid() = 201"]);
         assert_eq!(tab.command_label(201), ("fork of 200".to_string(), true));
         assert_eq!(tab.command_label(200), ("(no execve)".to_string(), true));
+    }
+
+    #[test]
+    fn test_running_command() {
+        let (_, t) = tab(TRACE);
+        assert_eq!(t.running_command(101), Some(("ls -la".to_string(), false)));
+        // A thread runs its creator's command at the time of the clone
+        assert_eq!(t.running_command(102), Some(("ls -la".to_string(), true)));
+        assert_eq!(
+            t.running_command(100),
+            Some(("sh -c ls | wc".to_string(), false))
+        );
+
+        let (_, t) = tab(&[
+            r#"400 10:00:00 execve("/bin/a", ["a"], 0x1 /* 1 var */) = 0"#,
+            "400 10:00:00 fork() = 401",
+            "401 10:00:00 fork() = 402",
+            r#"400 10:00:00 execve("/bin/b", ["b"], 0x1 /* 1 var */) = 0"#,
+            "402 10:00:00 getpid() = 402",
+        ]);
+        // Inherited through a fork that never exec'd; the parent's later exec does not count
+        assert_eq!(t.running_command(402), Some(("a".to_string(), true)));
+
+        let (_, t) = tab(&["200 10:00:00 fork() = 201", "201 10:00:00 getpid() = 201"]);
+        assert_eq!(t.running_command(201), None);
     }
 
     #[test]
