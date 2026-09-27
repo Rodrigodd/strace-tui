@@ -1,7 +1,26 @@
 use super::process_graph::ProcessGraph;
+use super::process_list::{ProcessAction, ProcessTabState};
 use crate::parser::{Addr2LineResolver, SummaryStats, SyscallEntry};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::{Position, Rect};
 use std::collections::HashSet;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Syscalls,
+    Processes,
+}
+
+impl Tab {
+    pub const ALL: [Tab; 2] = [Tab::Syscalls, Tab::Processes];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Tab::Syscalls => "1 Syscalls",
+            Tab::Processes => "2 Processes",
+        }
+    }
+}
 
 pub const MAX_TREE_DEPTH: usize = 4;
 
@@ -120,7 +139,7 @@ pub struct SearchState {
 }
 
 impl SearchState {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             active: false,
             query: String::new(),
@@ -161,6 +180,11 @@ pub struct App {
     pub search_state: SearchState,
     pub modal_search_state: SearchState,
 
+    // Tabs
+    pub active_tab: Tab,
+    pub process_tab: ProcessTabState,
+    pub tab_hitboxes: Vec<(Rect, Tab)>, // Filled when drawing the tab bar
+
     // Flags
     pub should_quit: bool,
     pub show_help: bool,
@@ -175,6 +199,7 @@ impl App {
         syscall_filter: Option<String>,
     ) -> Self {
         let process_graph = ProcessGraph::build(&entries);
+        let process_tab = ProcessTabState::new(&entries, &process_graph);
 
         // Build syscall list for filter modal
         let mut syscall_counts: std::collections::HashMap<String, usize> =
@@ -247,6 +272,9 @@ impl App {
             },
             search_state: SearchState::new(),
             modal_search_state: SearchState::new(),
+            active_tab: Tab::Syscalls,
+            process_tab,
+            tab_hitboxes: Vec::new(),
             should_quit: false,
             show_help: false,
             pending_editor_open: None,
@@ -291,7 +319,7 @@ impl App {
     }
 
     /// Builds tree prefix for a child item
-    fn build_tree_prefix(parent_prefix: &TreePrefix, is_last_child: bool) -> TreePrefix {
+    pub fn build_tree_prefix(parent_prefix: &TreePrefix, is_last_child: bool) -> TreePrefix {
         let mut prefix = *parent_prefix;
 
         // Find first empty slot
@@ -316,7 +344,7 @@ impl App {
 
     /// Builds base prefix for nested children. Replaces the parent's branch element with
     /// vertical/space continuation.
-    fn build_nested_prefix(parent_prefix: &TreePrefix, parent_is_last: bool) -> TreePrefix {
+    pub fn build_nested_prefix(parent_prefix: &TreePrefix, parent_is_last: bool) -> TreePrefix {
         let mut prefix = *parent_prefix;
 
         if let Some(last) = prefix
@@ -601,6 +629,10 @@ impl App {
 
     pub fn handle_event(&mut self, event: KeyEvent) {
         // Priority 1: Search mode
+        if self.active_tab == Tab::Processes && self.process_tab.search_state.active {
+            self.process_tab.handle_key(event, &self.entries);
+            return;
+        }
         if self.search_state.active {
             self.handle_search_event(event);
             return;
@@ -621,20 +653,42 @@ impl App {
         }
 
         let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
+
+        // Keys shared by all tabs
         match event.code {
-            // Quit
             KeyCode::Char('q') | KeyCode::Char('Q') => {
                 self.should_quit = true;
+                return;
             }
             KeyCode::Char('c') if ctrl => {
                 self.should_quit = true;
+                return;
             }
-
-            // Help
             KeyCode::Char('?') => {
                 self.show_help = true;
+                return;
             }
+            KeyCode::Char('1') => {
+                self.active_tab = Tab::Syscalls;
+                return;
+            }
+            KeyCode::Char('2') => {
+                self.active_tab = Tab::Processes;
+                return;
+            }
+            _ => {}
+        }
 
+        if self.active_tab == Tab::Processes {
+            if let ProcessAction::JumpToEntry(idx) =
+                self.process_tab.handle_key(event, &self.entries)
+            {
+                self.jump_to_entry(idx);
+            }
+            return;
+        }
+
+        match event.code {
             // Filter controls
             KeyCode::Char('h') => {
                 self.toggle_current_syscall_visibility();
@@ -708,6 +762,49 @@ impl App {
 
             _ => {}
         }
+    }
+
+    pub fn handle_mouse(&mut self, event: MouseEvent) {
+        if let MouseEventKind::Down(MouseButton::Left) = event.kind {
+            let pos = Position::new(event.column, event.row);
+            if let Some(&(_, tab)) = self
+                .tab_hitboxes
+                .iter()
+                .find(|(rect, _)| rect.contains(pos))
+            {
+                self.active_tab = tab;
+            }
+        }
+    }
+
+    /// Switch to the Syscalls tab with the given entry selected, showing hidden syscalls as
+    /// ghosts if the entry is hidden.
+    pub fn jump_to_entry(&mut self, entry_idx: usize) {
+        let Some(entry) = self.entries.get(entry_idx) else {
+            return;
+        };
+        if !self.show_hidden && self.hidden_syscalls.contains(&entry.syscall_name) {
+            self.show_hidden = true;
+            self.rebuild_display_lines();
+        }
+
+        let pos = self
+            .display_lines
+            .iter()
+            .position(|line| matches!(line, DisplayLine::SyscallHeader { entry_idx: idx, .. } if *idx == entry_idx))
+            .or_else(|| {
+                self.display_lines
+                    .iter()
+                    .position(|line| line.entry_idx() >= entry_idx)
+            });
+        if let Some(pos) = pos {
+            self.last_collapsed_position = None;
+            self.last_collapsed_scroll = None;
+            self.selected_line = pos;
+            // Center the target on screen
+            self.scroll_offset = pos.saturating_sub(self.last_visible_height / 2);
+        }
+        self.active_tab = Tab::Syscalls;
     }
 
     fn move_up(&mut self) {

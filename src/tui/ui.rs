@@ -1,4 +1,5 @@
-use super::app::{App, split_arguments};
+use super::app::{App, SearchState, Tab, split_arguments};
+use super::process_list::ProcessLineKind;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Flex, Layout, Rect},
@@ -22,15 +23,24 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // Draw header
     draw_header(f, app, chunks[0]);
 
-    // Draw divider
-    draw_divider(f, chunks[1]);
+    // Draw tab bar
+    draw_tab_bar(f, app, chunks[1]);
 
     // Draw main list
-    draw_list(f, app, chunks[2]);
+    let search_state = match app.active_tab {
+        Tab::Syscalls => {
+            draw_list(f, app, chunks[2]);
+            &app.search_state
+        }
+        Tab::Processes => {
+            draw_process_list(f, app, chunks[2]);
+            &app.process_tab.search_state
+        }
+    };
 
-    if app.search_state.active {
+    if search_state.active {
         // Draw search bar
-        draw_search_bar(f, app, chunks[3]);
+        draw_search_bar(f, search_state, chunks[3]);
     } else {
         // Draw divider
         draw_divider(f, chunks[3]);
@@ -75,6 +85,38 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     );
 
     f.render_widget(header, area);
+}
+
+/// Divider line with the tab titles on it. Records each title's area for mouse clicks.
+fn draw_tab_bar(f: &mut Frame, app: &mut App, area: Rect) {
+    app.tab_hitboxes.clear();
+
+    let mut spans = vec![Span::raw("─")];
+    let mut x = area.x + 1;
+    for tab in Tab::ALL {
+        let title = format!(" {} ", tab.title());
+        let width = title.chars().count() as u16;
+        let style = if tab == app.active_tab {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        app.tab_hitboxes
+            .push((Rect::new(x, area.y, width, 1).intersection(area), tab));
+        spans.push(Span::styled(title, style));
+        spans.push(Span::raw("─"));
+        x += width + 1;
+    }
+
+    let divider = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Line::from(spans));
+
+    f.render_widget(divider, area);
 }
 
 fn draw_divider(f: &mut Frame, area: Rect) {
@@ -717,9 +759,145 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
+fn draw_process_list(f: &mut Frame, app: &mut App, area: Rect) {
+    let tab = &mut app.process_tab;
+    let visible_height = area.height as usize;
+    tab.last_visible_height = visible_height;
+
+    if tab.selected_line >= tab.scroll_offset + visible_height {
+        tab.scroll_offset = tab.selected_line.saturating_sub(visible_height - 1);
+    } else if tab.selected_line < tab.scroll_offset {
+        tab.scroll_offset = tab.selected_line;
+    }
+
+    let tab = &app.process_tab;
+    let start = tab.scroll_offset;
+    let end = (tab.scroll_offset + visible_height).min(tab.display_lines.len());
+    let width = area.width as usize;
+
+    let mut items = Vec::new();
+    for line in &tab.display_lines[start..end] {
+        let content = if line.kind == ProcessLineKind::Row {
+            let arrow = if tab.expanded.contains(&line.pid) {
+                "▼"
+            } else {
+                "▶"
+            };
+            let (label, dimmed) = tab.command_label(line.pid);
+            let label_color = if dimmed {
+                Color::DarkGray
+            } else {
+                Color::White
+            };
+
+            let graph_chars = app.process_graph.render_process_start(line.pid);
+            let graph_len = if graph_chars.is_empty() {
+                0
+            } else {
+                graph_chars.len() + 4 // "  " + graph + "  "
+            };
+
+            let timestamp = tab
+                .summary(line.pid)
+                .and_then(|s| s.first_own_entry_idx)
+                .and_then(|idx| app.entries.get(idx))
+                .map(|e| e.timestamp.as_str())
+                .unwrap_or("");
+            let metadata_pid = format!("[{}]", line.pid);
+            let metadata_time = format!(" {}", timestamp);
+            let metadata_len = metadata_pid.chars().count() + metadata_time.chars().count();
+
+            let left = format!("{} {}", arrow, label);
+            let available_for_left = width.saturating_sub(graph_len + metadata_len + 1);
+            let left = truncate_line(&left, available_for_left);
+            let padding = width.saturating_sub(left.chars().count() + graph_len + metadata_len);
+
+            let mut spans = vec![
+                Span::styled(left, Style::default().fg(label_color)),
+                Span::raw(" ".repeat(padding)),
+            ];
+            if !graph_chars.is_empty() {
+                spans.push(Span::raw("  "));
+                for (ch, color) in graph_chars {
+                    spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
+                }
+                spans.push(Span::raw("  "));
+            }
+            spans.push(Span::styled(
+                metadata_pid,
+                Style::default().fg(app.process_graph.get_color(line.pid)),
+            ));
+            spans.push(Span::styled(
+                metadata_time,
+                Style::default().fg(Color::White),
+            ));
+            Line::from(spans)
+        } else {
+            // Collapsible section headers get an arrow in place of the horizontal branch
+            let prefix = match tab.section_expanded(line) {
+                Some(expanded) => format!(
+                    "{}{} ",
+                    App::tree_prefix_to_string_header(&line.tree_prefix),
+                    if expanded { "▼" } else { "▶" }
+                ),
+                None => App::tree_prefix_to_string(&line.tree_prefix),
+            };
+            let mut available = width.saturating_sub(prefix.chars().count());
+            let mut spans = vec![Span::raw(prefix)];
+            // Truncate the detail spans to the available width
+            for span in tab.detail_spans(line, &app.entries) {
+                if available == 0 {
+                    break;
+                }
+                let len = span.content.chars().count();
+                if len <= available {
+                    available -= len;
+                    spans.push(span);
+                } else {
+                    spans.push(Span::styled(
+                        truncate_line(&span.content, available),
+                        span.style,
+                    ));
+                    available = 0;
+                }
+            }
+            Line::from(spans)
+        };
+
+        let item = if line.is_search_match {
+            ListItem::new(content).style(Style::default().bg(Color::Rgb(60, 60, 0)))
+        } else {
+            ListItem::new(content)
+        };
+        items.push(item);
+    }
+
+    let list = List::new(items).highlight_style(
+        Style::default()
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    let mut state = ratatui::widgets::ListState::default();
+    if tab.selected_line >= start && tab.selected_line < end {
+        state.select(Some(tab.selected_line - start));
+    }
+
+    f.render_stateful_widget(list, area, &mut state);
+}
+
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    if app.active_tab == Tab::Processes {
+        let footer = Paragraph::new(
+            "?: Help | q: Quit | 1/2: Tab | ↑↓/jk: Nav | ←→: Fold | Enter: Toggle/Jump | e/c: All | /: Search",
+        )
+        .style(Style::default().fg(Color::DarkGray));
+        f.render_widget(footer, area);
+        return;
+    }
+
     let mut footer_text = String::from(
-        "?: Help | q: Quit | [Ctrl+] ↑↓/jk: Nav | ←→: Fold | Enter: Toggle | e/c: All | h: Hide | H: Filter | .: Ghost",
+        "?: Help | q: Quit | 1/2: Tab | [Ctrl+] ↑↓/jk: Nav | ←→: Fold | Enter: Toggle | e/c: All | h: Hide | H: Filter | .: Ghost",
     );
 
     // Add filter status
@@ -735,9 +913,9 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(footer, area);
 }
 
-fn draw_search_bar(f: &mut Frame, app: &App, area: Rect) {
-    let match_info = if app.search_state.matches.is_empty() {
-        if app.search_state.query.is_empty() {
+fn draw_search_bar(f: &mut Frame, search_state: &SearchState, area: Rect) {
+    let match_info = if search_state.matches.is_empty() {
+        if search_state.query.is_empty() {
             String::new()
         } else {
             "No matches".to_string()
@@ -745,20 +923,20 @@ fn draw_search_bar(f: &mut Frame, app: &App, area: Rect) {
     } else {
         format!(
             "Match {}/{}",
-            app.search_state.current_match_idx + 1,
-            app.search_state.matches.len()
+            search_state.current_match_idx + 1,
+            search_state.matches.len()
         )
     };
 
     let text = if match_info.is_empty() {
         format!(
             "Search: {}█  Enter:accept | Esc: cancel | Ctrl-n/N: next/prev",
-            app.search_state.query
+            search_state.query
         )
     } else {
         format!(
             "Search: {}█  [{}]  Enter:accept | Esc: cancel | Ctrl-n/N: next/prev",
-            app.search_state.query, match_info
+            search_state.query, match_info
         )
     };
 
@@ -831,6 +1009,13 @@ fn draw_help(f: &mut Frame) {
         Line::from("  Enter       Accept search"),
         Line::from("  Esc         Cancel search"),
         Line::from(""),
+        Line::from(Span::styled(
+            "Tabs:",
+            Style::default().add_modifier(Modifier::UNDERLINED),
+        )),
+        Line::from("  1/2         Syscalls/Processes tab"),
+        Line::from("  Click       Switch to clicked tab"),
+        Line::from("  Enter       Jump to syscall/process"),
         Line::from(""),
         Line::from(Span::styled(
             "Press ? or Esc to close help",

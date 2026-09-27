@@ -36,6 +36,7 @@ src/
     ├── app.rs           # State, DisplayLine tree, key handling
     ├── ui.rs            # Rendering, help/filter modals
     ├── process_graph.rs # Process lifetime / fork / wait graph
+    ├── process_list.rs  # Processes tab: per-PID summaries, own display lines/search
     └── syscall_colors.rs # Category-based syscall colors
 ```
 
@@ -45,6 +46,7 @@ Non-obvious details:
 - The TUI flattens everything into a `Vec<DisplayLine>` built by `rebuild_display_lines()`. Each line carries a `TreePrefix` for the │ ├ └ drawing.
 - `selected_line` indexes `display_lines`, not the syscall list.
 - Hidden syscalls (`hidden_syscalls`) are skipped unless `show_hidden` is on, which shows them as "ghost" lines.
+- Two tabs (`App::active_tab`, keys `1`/`2` or click): Syscalls uses the `App` fields above; Processes keeps its own state in `ProcessTabState` and returns `ProcessAction::JumpToEntry` for `App::jump_to_entry()`.
 
 ## Common Tasks
 

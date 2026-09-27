@@ -1,12 +1,13 @@
 mod app;
 mod process_graph;
+mod process_list;
 mod syscall_colors;
 mod ui;
 
 pub use app::App;
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEvent, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -85,8 +86,10 @@ where
         let app_ref = &mut *app;
         terminal.draw(move |f| ui::draw(f, app_ref))?;
 
-        if let Some(event) = get_event()? {
-            app.handle_event(event);
+        match get_event()? {
+            Some(Event::Key(key)) => app.handle_event(key),
+            Some(Event::Mouse(mouse)) => app.handle_mouse(mouse),
+            _ => {}
         }
 
         if app.should_quit {
@@ -131,13 +134,13 @@ where
     }
 }
 
-pub fn get_event() -> io::Result<Option<KeyEvent>> {
-    if event::poll(Duration::from_millis(100))?
-        && let Event::Key(key) = event::read()?
-    {
-        // Only process key press events, not release
-        if key.kind == KeyEventKind::Press {
-            return Ok(Some(key));
+pub fn get_event() -> io::Result<Option<Event>> {
+    if event::poll(Duration::from_millis(100))? {
+        match event::read()? {
+            // Only process key press events, not release
+            Event::Key(key) if key.kind == KeyEventKind::Press => return Ok(Some(Event::Key(key))),
+            Event::Mouse(mouse) => return Ok(Some(Event::Mouse(mouse))),
+            _ => {}
         }
     }
     Ok(None)
