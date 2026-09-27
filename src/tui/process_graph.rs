@@ -1,6 +1,6 @@
 use crate::parser::SyscallEntry;
 use ratatui::style::Color;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const GRAPH_COLORS: &[Color] = &[
     Color::Blue,
@@ -15,12 +15,29 @@ const GRAPH_COLORS: &[Color] = &[
 
 #[derive(Debug)]
 pub struct ProcessInfo {
-    pub _pid: u32,
+    pub pid: u32,
     pub column: usize,
     pub color: Color,
     pub first_entry_idx: usize,
     pub last_entry_idx: usize,
-    pub _parent_pid: Option<u32>,
+    /// PID/TID that called the fork/clone that created this process
+    pub parent_pid: Option<u32>,
+    /// Index of the fork/clone entry that returned this process's PID
+    pub fork_entry_idx: Option<usize>,
+    /// Whether it was created by a clone with CLONE_THREAD
+    pub is_thread: bool,
+}
+
+impl ProcessInfo {
+    /// Order in which processes start. A root whose first syscall is a fork starts before the
+    /// child created at that same entry.
+    pub fn start_key(&self) -> (usize, bool, u32) {
+        (
+            self.first_entry_idx,
+            self.fork_entry_idx.is_some(),
+            self.pid,
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -43,7 +60,8 @@ impl ProcessGraph {
         let mut processes: HashMap<u32, ProcessInfo> = HashMap::new();
         let mut pid_first_seen: HashMap<u32, usize> = HashMap::new();
         let mut pid_last_seen: HashMap<u32, usize> = HashMap::new();
-        let mut fork_relationships: Vec<(usize, u32, u32)> = Vec::new(); // (entry_idx, parent_pid, child_pid)
+        // (entry_idx, parent_pid, child_pid, is_thread)
+        let mut fork_relationships: Vec<(usize, u32, u32, bool)> = Vec::new();
 
         // First pass: find all PIDs, their lifetimes, and fork relationships
         for (idx, entry) in entries.iter().enumerate() {
@@ -60,7 +78,13 @@ impl ProcessGraph {
                 && let Ok(child_pid) = ret.trim().parse::<u32>()
                 && child_pid > 0
             {
-                fork_relationships.push((idx, pid, child_pid));
+                // For a resumed clone, the flags are in the unfinished entry's arguments
+                let is_thread = entry.arguments.contains("CLONE_THREAD")
+                    || entry
+                        .unfinished_entry_idx
+                        .and_then(|i| entries.get(i))
+                        .is_some_and(|e| e.arguments.contains("CLONE_THREAD"));
+                fork_relationships.push((idx, pid, child_pid, is_thread));
                 pid_first_seen.entry(child_pid).or_insert(idx);
                 pid_last_seen.insert(child_pid, idx);
             }
@@ -82,7 +106,13 @@ impl ProcessGraph {
             .map(|(pid, idx)| (pid, idx, false))
             .chain(pid_last_seen.iter().map(|(&pid, &idx)| (pid, idx, true)))
             .collect();
-        pids_ordered.sort_by_key(|(_, first_idx, _)| *first_idx);
+        // Break ties deterministically: starts before ends (so a column is not reused while both
+        // processes are alive), and a root before the child it forks at that same entry.
+        let fork_children: HashSet<u32> = fork_relationships
+            .iter()
+            .map(|(_, _, child, _)| *child)
+            .collect();
+        pids_ordered.sort_by_key(|&(pid, idx, end)| (idx, end, fork_children.contains(&pid), pid));
 
         // Second pass: Assign columns with reuse
         let mut free_columns: Vec<usize> = Vec::new();
@@ -110,20 +140,21 @@ impl ProcessGraph {
             };
 
             // Find parent if this was a fork child
-            let parent_pid = fork_relationships
+            let fork = fork_relationships
                 .iter()
-                .find(|(_, _, child)| *child == pid)
-                .map(|(_, parent, _)| *parent);
+                .find(|(_, _, child, _)| *child == pid);
 
             processes.insert(
                 pid,
                 ProcessInfo {
-                    _pid: pid,
+                    pid,
                     column,
                     color: GRAPH_COLORS[index % GRAPH_COLORS.len()],
                     first_entry_idx: idx,
                     last_entry_idx: pid_last_seen.get(&pid).cloned().unwrap_or(idx),
-                    _parent_pid: parent_pid,
+                    parent_pid: fork.map(|(_, parent, _, _)| *parent),
+                    fork_entry_idx: fork.map(|(idx, _, _, _)| *idx),
+                    is_thread: fork.is_some_and(|(_, _, _, thread)| *thread),
                 },
             );
         }
@@ -284,11 +315,151 @@ impl ProcessGraph {
         graph
     }
 
+    /// Render the graph for the start of a process: `●` at its own column, and a branch from the
+    /// parent's column (`├─●` or `●─┤`) if it has a known parent.
+    pub fn render_process_start(&self, pid: u32) -> Vec<(char, Color)> {
+        if !self.enabled {
+            return Vec::new();
+        }
+
+        let Some(info) = self.processes.get(&pid) else {
+            return Vec::new();
+        };
+
+        let entry_idx = info.first_entry_idx;
+        // Only lanes of processes that started before this one are alive
+        let is_alive = |col: usize| {
+            self.processes.values().any(|other| {
+                other.column == col
+                    && other.start_key() < info.start_key()
+                    && other.last_entry_idx >= entry_idx
+            })
+        };
+        let parent_column = info
+            .parent_pid
+            .and_then(|parent| self.processes.get(&parent))
+            .map(|parent| parent.column)
+            .filter(|&col| col != info.column);
+
+        let mut graph = Vec::new();
+        for col in 0..self.max_columns {
+            let col_color = self.get_color_for_column(col, entry_idx);
+            let ch = if col == info.column {
+                '●'
+            } else if let Some(parent_col) = parent_column {
+                let min_col = parent_col.min(info.column);
+                let max_col = parent_col.max(info.column);
+                if col == parent_col {
+                    if parent_col < info.column {
+                        '├'
+                    } else {
+                        '┤'
+                    }
+                } else if col > min_col && col < max_col {
+                    '─'
+                } else if is_alive(col) {
+                    '│'
+                } else {
+                    ' '
+                }
+            } else if is_alive(col) {
+                '│'
+            } else {
+                ' '
+            };
+            graph.push((ch, col_color));
+        }
+
+        graph
+    }
+
     fn is_active_at(&self, column: usize, entry_idx: usize) -> bool {
         self.processes.values().any(|info| {
             info.column == column
                 && entry_idx >= info.first_entry_idx
                 && entry_idx <= info.last_entry_idx
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::StraceParser;
+
+    fn build(lines: &[&str]) -> ProcessGraph {
+        let entries = StraceParser::new()
+            .parse_lines(lines.iter().map(|l| l.to_string()), false)
+            .unwrap();
+        ProcessGraph::build(&entries)
+    }
+
+    fn chars(graph: &ProcessGraph, pid: u32) -> String {
+        graph
+            .render_process_start(pid)
+            .into_iter()
+            .map(|(c, _)| c)
+            .collect()
+    }
+
+    #[test]
+    fn test_parent_and_thread_flag() {
+        let graph = build(&[
+            "1 clone(child_stack=NULL, flags=CLONE_VM|CLONE_THREAD) = 2",
+            "1 fork() = 3",
+            "2 getpid() = 1",
+            "3 getpid() = 3",
+        ]);
+        let thread = &graph.processes[&2];
+        assert_eq!(thread.parent_pid, Some(1));
+        assert_eq!(thread.fork_entry_idx, Some(0));
+        assert!(thread.is_thread);
+        let fork = &graph.processes[&3];
+        assert_eq!(fork.parent_pid, Some(1));
+        assert!(!fork.is_thread);
+        assert_eq!(graph.processes[&1].parent_pid, None);
+    }
+
+    #[test]
+    fn test_thread_flag_from_unfinished_clone() {
+        let graph = build(&[
+            "1 clone3({flags=CLONE_VM|CLONE_THREAD, exit_signal=0}, 88 <unfinished ...>",
+            "1 <... clone3 resumed>) = 2",
+            "2 getpid() = 1",
+        ]);
+        assert!(graph.processes[&2].is_thread);
+    }
+
+    #[test]
+    fn test_render_process_start() {
+        let graph = build(&[
+            "1 fork() = 2",
+            "2 fork() = 3",
+            "3 getpid() = 3",
+            "3 +++ exited with 0 +++",
+            "2 +++ exited with 0 +++",
+            "1 fork() = 4",
+            "4 getpid() = 4",
+        ]);
+        assert_eq!(chars(&graph, 1), "●  ");
+        assert_eq!(chars(&graph, 2), "├● ");
+        assert_eq!(chars(&graph, 3), "│├●");
+        // Process 4 reuses column 1, while column 2 is free
+        assert_eq!(chars(&graph, 4), "├● ");
+    }
+
+    #[test]
+    fn test_render_process_start_child_left_of_parent() {
+        let graph = build(&[
+            "1 fork() = 2",
+            "1 fork() = 3",
+            "2 +++ exited with 0 +++",
+            "3 fork() = 4",
+            "4 getpid() = 4",
+            "1 wait4(-1, NULL, 0, NULL) = 3",
+        ]);
+        assert_eq!(graph.processes[&3].column, 2);
+        assert_eq!(graph.processes[&4].column, 1);
+        assert_eq!(chars(&graph, 4), "│●┤");
     }
 }
