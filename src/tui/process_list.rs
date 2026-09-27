@@ -306,8 +306,11 @@ impl ProcessTabState {
         let Some(summary) = self.summary(pid) else {
             return (String::new(), true);
         };
-        if let Some(exec) = summary.first_exec() {
-            return (exec.argv.clone(), false);
+        let kind = if summary.is_thread { "thread" } else { "fork" };
+        match self.running_command(pid) {
+            Some((cmd, false)) => return (cmd, false),
+            Some((cmd, true)) => return (format!("{}: {}", kind, cmd), true),
+            None => {}
         }
         match summary.parent_pid {
             Some(parent) if summary.is_thread => (format!("thread of {}", parent), true),
@@ -1005,7 +1008,8 @@ mod tests {
         assert_eq!(tab.command_label(100), ("sh -c ls | wc".to_string(), false));
         // The failed exec is skipped for the label
         assert_eq!(tab.command_label(101), ("ls -la".to_string(), false));
-        assert_eq!(tab.command_label(102), ("thread of 101".to_string(), true));
+        // Without an exec, the inherited command is used
+        assert_eq!(tab.command_label(102), ("thread: ls -la".to_string(), true));
     }
 
     #[test]
