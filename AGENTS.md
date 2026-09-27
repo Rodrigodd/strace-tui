@@ -47,6 +47,7 @@ Non-obvious details:
 - `selected_line` indexes `display_lines`, not the syscall list.
 - Hidden syscalls (`hidden_syscalls`) are skipped unless `show_hidden` is on, which shows them as "ghost" lines.
 - Two tabs (`App::active_tab`, keys `1`/`2` or click): Syscalls uses the `App` fields above; Processes keeps its own state in `ProcessTabState` and returns `ProcessAction::JumpToEntry` for `App::jump_to_entry()`.
+- Hidden processes live in `ProcessTabState::hidden_pids` (each tab has its own ghost mode); the Syscalls tab checks them through `App::is_entry_hidden()`.
 
 ## Common Tasks
 

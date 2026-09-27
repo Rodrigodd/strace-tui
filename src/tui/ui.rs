@@ -1,4 +1,4 @@
-use super::app::{App, SearchState, Tab, split_arguments};
+use super::app::{App, FilterTab, SearchState, Tab, split_arguments};
 use super::process_list::ProcessLineKind;
 use ratatui::{
     Frame,
@@ -89,27 +89,8 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 
 /// Divider line with the tab titles on it. Records each title's area for mouse clicks.
 fn draw_tab_bar(f: &mut Frame, app: &mut App, area: Rect) {
-    app.tab_hitboxes.clear();
-
-    let mut spans = vec![Span::raw("─")];
-    let mut x = area.x + 1;
-    for tab in Tab::ALL {
-        let title = format!(" {} ", tab.title());
-        let width = title.chars().count() as u16;
-        let style = if tab == app.active_tab {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Gray)
-        };
-        app.tab_hitboxes
-            .push((Rect::new(x, area.y, width, 1).intersection(area), tab));
-        spans.push(Span::styled(title, style));
-        spans.push(Span::raw("─"));
-        x += width + 1;
-    }
+    let tabs = Tab::ALL.map(|tab| (tab, tab.title()));
+    let spans = tab_title_spans(&tabs, app.active_tab, area, &mut app.tab_hitboxes);
 
     let divider = Block::default()
         .borders(Borders::TOP)
@@ -117,6 +98,40 @@ fn draw_tab_bar(f: &mut Frame, app: &mut App, area: Rect) {
         .title(Line::from(spans));
 
     f.render_widget(divider, area);
+}
+
+/// Spans for tab titles drawn in a block's title, starting at `title_area`'s top-left corner.
+/// Records each title's area in `hitboxes` for mouse clicks.
+fn tab_title_spans<T: Copy + PartialEq>(
+    tabs: &[(T, &str)],
+    active: T,
+    title_area: Rect,
+    hitboxes: &mut Vec<(Rect, T)>,
+) -> Vec<Span<'static>> {
+    hitboxes.clear();
+
+    let mut spans = vec![Span::raw("─")];
+    let mut x = title_area.x + 1;
+    for &(tab, name) in tabs {
+        let title = format!(" {} ", name);
+        let width = title.chars().count() as u16;
+        let style = if tab == active {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        hitboxes.push((
+            Rect::new(x, title_area.y, width, 1).intersection(title_area),
+            tab,
+        ));
+        spans.push(Span::styled(title, style));
+        spans.push(Span::raw("─"));
+        x += width + 1;
+    }
+    spans
 }
 
 fn draw_divider(f: &mut Frame, area: Rect) {
@@ -784,8 +799,13 @@ fn draw_process_list(f: &mut Frame, app: &mut App, area: Rect) {
                 "▶"
             };
             let (label, dimmed) = tab.command_label(line.pid);
-            // Color the row with the process's graph color, dimmed when it has no exec
-            let pid_color = app.process_graph.get_color(line.pid);
+            // Color the row with the process's graph color, dimmed when it has no exec. Hidden
+            // processes (only shown in ghost mode) are gray.
+            let pid_color = if tab.is_hidden(line.pid) {
+                Color::DarkGray
+            } else {
+                app.process_graph.get_color(line.pid)
+            };
             let row_style = Style::default().fg(pid_color);
             let label_style = if dimmed {
                 row_style.add_modifier(Modifier::DIM)
@@ -842,7 +862,11 @@ fn draw_process_list(f: &mut Frame, app: &mut App, area: Rect) {
             let mut available = width.saturating_sub(prefix.chars().count());
             let mut spans = vec![Span::raw(prefix)];
             // Truncate the detail spans to the available width
-            for span in tab.detail_spans(line, &app.entries) {
+            let is_ghost = tab.is_hidden(line.pid);
+            for mut span in tab.detail_spans(line, &app.entries) {
+                if is_ghost {
+                    span.style = span.style.fg(Color::DarkGray);
+                }
                 if available == 0 {
                     break;
                 }
@@ -885,16 +909,23 @@ fn draw_process_list(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     if app.active_tab == Tab::Processes {
-        let footer = Paragraph::new(
-            "?: Help | q: Quit | 1/2: Tab | ↑↓/jk: Nav | ←→: Fold | Enter: Toggle/Jump | e/c: All | /: Search",
-        )
-        .style(Style::default().fg(Color::DarkGray));
+        let tab = &app.process_tab;
+        let mut footer_text = String::from(
+            "?: Help | q: Quit | 1/2: Tab | ↑↓/jk: Nav | ←→: Fold | Enter: Toggle/Jump | e/c: All | h: Hide | H: Filter | .: Ghost",
+        );
+        if !tab.hidden_pids.is_empty() {
+            footer_text.push_str(&format!(" | Hidden: {}", tab.hidden_pids.len()));
+            if tab.show_hidden {
+                footer_text.push_str(" (shown)");
+            }
+        }
+        let footer = Paragraph::new(footer_text).style(Style::default().fg(Color::DarkGray));
         f.render_widget(footer, area);
         return;
     }
 
     let mut footer_text = String::from(
-        "?: Help | q: Quit | 1/2: Tab | [Ctrl+] ↑↓/jk: Nav | ←→: Fold | Enter: Toggle | e/c: All | h: Hide | H: Filter | .: Ghost",
+        "?: Help | q: Quit | 1/2: Tab | [Ctrl+] ↑↓/jk: Nav | ←→: Fold | Enter: Toggle | e/c: All | h/p: Hide | H: Filter | .: Ghost",
     );
 
     // Add filter status
@@ -985,6 +1016,8 @@ fn draw_help(f: &mut Frame) {
             Style::default().add_modifier(Modifier::UNDERLINED),
         )),
         Line::from("  h           Hide/show current syscall"),
+        Line::from("  p           Hide/show current process"),
+        Line::from("  h (Procs)   Hide/show current process"),
         Line::from("  H           Open filter modal"),
         Line::from("  .           Toggle show hidden"),
         Line::from(""),
@@ -994,6 +1027,7 @@ fn draw_help(f: &mut Frame) {
         )),
         Line::from("  Space/Enter Toggle checkbox"),
         Line::from("  a           Toggle all"),
+        Line::from("  ←→/1/2      Syscalls/Processes list"),
         Line::from("  Esc/H/q     Close modal"),
         Line::from(""),
         Line::from(Span::styled(
@@ -1046,8 +1080,7 @@ fn draw_help(f: &mut Frame) {
     f.render_widget(right_help, columns[1]);
 }
 
-fn draw_filter_modal(f: &mut Frame, app: &App) {
-    let modal_state = &app.filter_modal_state;
+fn draw_filter_modal(f: &mut Frame, app: &mut App) {
     let area = centered_rect(70, 70, f.area());
 
     // Split area if search is active
@@ -1064,32 +1097,83 @@ fn draw_filter_modal(f: &mut Frame, app: &App) {
         (area, None)
     };
 
+    // Tab titles in the top border, after the corner
+    let tabs = FilterTab::ALL.map(|tab| (tab, tab.title()));
+    let mut title = tab_title_spans(
+        &tabs,
+        app.filter_modal_state.active_tab,
+        Rect {
+            x: list_area.x + 1,
+            width: list_area.width.saturating_sub(2),
+            ..list_area
+        },
+        &mut app.modal_tab_hitboxes,
+    );
+    let hints = if app.modal_search_state.active {
+        " Search Mode "
+    } else {
+        " Space: Toggle | a: Toggle All | ←→: Tab | /: Search | q/Esc: Close "
+    };
+    title.push(Span::raw(hints));
+
+    let app = &*app;
+    let modal_state = &app.filter_modal_state;
+
     // Calculate visible window (account for borders and search bar)
     let visible_height = list_area.height.saturating_sub(2) as usize; // -2 for borders
-    let total_items = modal_state.syscall_list.len();
+    let total_items = match modal_state.active_tab {
+        FilterTab::Syscalls => modal_state.syscall_list.len(),
+        FilterTab::Processes => app.process_tab.summaries.len(),
+    };
 
     // Only render visible items
     let start = modal_state.scroll_offset;
     let end = (start + visible_height).min(total_items);
 
     // Build list items with checkboxes for visible range
-    let items: Vec<ListItem> = modal_state
-        .syscall_list
-        .iter()
-        .enumerate()
-        .skip(start)
-        .take(end - start)
-        .map(|(idx, (name, count))| {
-            let is_hidden = app.hidden_syscalls.contains(name);
-            let checkbox = if is_hidden { "[ ]" } else { "[✓]" };
-
+    let items: Vec<ListItem> = (start..end)
+        .map(|idx| {
             // Check if this is a search match
             let is_match = app.modal_search_state.matches.contains(&idx);
             let is_current_match = app.modal_search_state.active
                 && !app.modal_search_state.matches.is_empty()
                 && idx == app.modal_search_state.matches[app.modal_search_state.current_match_idx];
 
-            let text = format!("{} {} ({} calls)", checkbox, name, count);
+            let (line, is_hidden) = match modal_state.active_tab {
+                FilterTab::Syscalls => {
+                    let (name, count) = &modal_state.syscall_list[idx];
+                    let is_hidden = app.hidden_syscalls.contains(name);
+                    let checkbox = if is_hidden { "[ ]" } else { "[✓]" };
+                    let text = format!("{} {} ({} calls)", checkbox, name, count);
+                    (Line::from(text), is_hidden)
+                }
+                FilterTab::Processes => {
+                    let summary = &app.process_tab.summaries[idx];
+                    let pid = summary.pid;
+                    let is_hidden = app.process_tab.is_hidden(pid);
+                    let checkbox = if is_hidden { "[ ]" } else { "[✓]" };
+                    let (label, dimmed) = app.process_tab.command_label(pid);
+                    // Colors only for visible, non-highlighted rows; the item style wins otherwise
+                    let (pid_style, label_style) = if is_hidden || is_match || is_current_match {
+                        (Style::default(), Style::default())
+                    } else {
+                        let color = app.process_graph.get_color(pid);
+                        let label_style = if dimmed {
+                            Style::default().add_modifier(Modifier::DIM)
+                        } else {
+                            Style::default()
+                        };
+                        (Style::default().fg(color), label_style)
+                    };
+                    let line = Line::from(vec![
+                        Span::raw(format!("{} ", checkbox)),
+                        Span::styled(format!("[{}] ", pid), pid_style),
+                        Span::styled(label, label_style),
+                        Span::raw(format!(" ({} syscalls)", summary.syscall_count)),
+                    ]);
+                    (line, is_hidden)
+                }
+            };
 
             let style = if is_current_match {
                 Style::default().bg(Color::Yellow).fg(Color::Black)
@@ -1101,18 +1185,16 @@ fn draw_filter_modal(f: &mut Frame, app: &App) {
                 Style::default()
             };
 
-            ListItem::new(Line::from(text)).style(style)
+            ListItem::new(line).style(style)
         })
         .collect();
 
-    let title = if app.modal_search_state.active {
-        "Filter Syscalls - Search Mode"
-    } else {
-        "Filter Syscalls (Space: Toggle | a: Toggle All | /: Search | q/Esc: Close)"
-    };
-
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(Line::from(title)),
+        )
         .highlight_style(
             Style::default()
                 .bg(Color::DarkGray)

@@ -5,6 +5,13 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::{Position, Rect};
 use std::collections::HashSet;
 
+/// What `toggle_current_visibility` hides
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HideTarget {
+    Syscall,
+    Process,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Syscalls,
@@ -123,10 +130,32 @@ impl DisplayLine {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterTab {
+    Syscalls,
+    Processes,
+}
+
+impl FilterTab {
+    pub const ALL: [FilterTab; 2] = [FilterTab::Syscalls, FilterTab::Processes];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            FilterTab::Syscalls => "1 Syscalls",
+            FilterTab::Processes => "2 Processes",
+        }
+    }
+}
+
 pub struct FilterModalState {
     pub syscall_list: Vec<(String, usize)>, // (syscall_name, count)
+    /// Tab being shown; kept when the modal is closed so it reopens on it
+    pub active_tab: FilterTab,
+    /// Position in the active tab's list
     pub selected_index: usize,
     pub scroll_offset: usize,
+    /// Position in the other tab's list, swapped in when switching tabs
+    pub inactive_position: (usize, usize),
 }
 
 pub struct SearchState {
@@ -184,6 +213,7 @@ pub struct App {
     pub active_tab: Tab,
     pub process_tab: ProcessTabState,
     pub tab_hitboxes: Vec<(Rect, Tab)>, // Filled when drawing the tab bar
+    pub modal_tab_hitboxes: Vec<(Rect, FilterTab)>, // Filled when drawing the filter modal
 
     // Flags
     pub should_quit: bool,
@@ -267,14 +297,17 @@ impl App {
             show_filter_modal: false,
             filter_modal_state: FilterModalState {
                 syscall_list,
+                active_tab: FilterTab::Syscalls,
                 selected_index: 0,
                 scroll_offset: 0,
+                inactive_position: (0, 0),
             },
             search_state: SearchState::new(),
             modal_search_state: SearchState::new(),
             active_tab: Tab::Syscalls,
             process_tab,
             tab_hitboxes: Vec::new(),
+            modal_tab_hitboxes: Vec::new(),
             should_quit: false,
             show_help: false,
             pending_editor_open: None,
@@ -377,7 +410,7 @@ impl App {
 
         for (idx, entry) in self.entries.iter().enumerate() {
             // Check if this syscall should be hidden
-            let is_hidden = self.hidden_syscalls.contains(&entry.syscall_name);
+            let is_hidden = self.is_entry_hidden(entry);
 
             // Skip hidden items unless show_hidden is true
             if is_hidden && !self.show_hidden {
@@ -680,10 +713,14 @@ impl App {
         }
 
         if self.active_tab == Tab::Processes {
-            if let ProcessAction::JumpToEntry(idx) =
-                self.process_tab.handle_key(event, &self.entries)
-            {
-                self.jump_to_entry(idx);
+            match self.process_tab.handle_key(event, &self.entries) {
+                ProcessAction::None => {}
+                ProcessAction::JumpToEntry(idx) => self.jump_to_entry(idx),
+                ProcessAction::HiddenChanged => self.rebuild_display_lines(),
+                ProcessAction::OpenFilterModal => {
+                    self.open_filter_modal();
+                    self.set_filter_tab(FilterTab::Processes);
+                }
             }
             return;
         }
@@ -691,7 +728,10 @@ impl App {
         match event.code {
             // Filter controls
             KeyCode::Char('h') => {
-                self.toggle_current_syscall_visibility();
+                self.toggle_current_visibility(HideTarget::Syscall);
+            }
+            KeyCode::Char('p') => {
+                self.toggle_current_visibility(HideTarget::Process);
             }
             KeyCode::Char('H') => {
                 self.open_filter_modal();
@@ -767,7 +807,15 @@ impl App {
     pub fn handle_mouse(&mut self, event: MouseEvent) {
         if let MouseEventKind::Down(MouseButton::Left) = event.kind {
             let pos = Position::new(event.column, event.row);
-            if let Some(&(_, tab)) = self
+            if self.show_filter_modal {
+                if let Some(&(_, tab)) = self
+                    .modal_tab_hitboxes
+                    .iter()
+                    .find(|(rect, _)| rect.contains(pos))
+                {
+                    self.set_filter_tab(tab);
+                }
+            } else if let Some(&(_, tab)) = self
                 .tab_hitboxes
                 .iter()
                 .find(|(rect, _)| rect.contains(pos))
@@ -783,7 +831,7 @@ impl App {
         let Some(entry) = self.entries.get(entry_idx) else {
             return;
         };
-        if !self.show_hidden && self.hidden_syscalls.contains(&entry.syscall_name) {
+        if !self.show_hidden && self.is_entry_hidden(entry) {
             self.show_hidden = true;
             self.rebuild_display_lines();
         }
@@ -1446,26 +1494,44 @@ impl App {
     }
 
     // Filter management methods
-    pub fn toggle_current_syscall_visibility(&mut self) {
+    /// Whether an entry is hidden, by its syscall name or by its process
+    pub fn is_entry_hidden(&self, entry: &SyscallEntry) -> bool {
+        self.hidden_syscalls.contains(&entry.syscall_name) || self.process_tab.is_hidden(entry.pid)
+    }
+
+    /// Hide or show a process in both tabs
+    pub fn set_pid_hidden(&mut self, pid: u32, hidden: bool) {
+        self.process_tab.set_pid_hidden(pid, hidden, &self.entries);
+        self.rebuild_display_lines();
+    }
+
+    /// Toggle the visibility of the selected entry's syscall name or process
+    pub fn toggle_current_visibility(&mut self, target: HideTarget) {
         if self.selected_line >= self.display_lines.len() {
             return;
         }
 
         let entry_idx = self.display_lines[self.selected_line].entry_idx();
-        let syscall_name = self.entries[entry_idx].syscall_name.clone();
-        let was_hiding = !self.hidden_syscalls.contains(&syscall_name);
+        let entry = &self.entries[entry_idx];
+        let was_hiding = match target {
+            HideTarget::Syscall => !self.hidden_syscalls.contains(&entry.syscall_name),
+            HideTarget::Process => !self.process_tab.is_hidden(entry.pid),
+        };
 
         // Save screen position (0 = top of screen, increases downward)
         let screen_position = self.selected_line.saturating_sub(self.scroll_offset);
 
         // Toggle visibility
-        if self.hidden_syscalls.contains(&syscall_name) {
-            self.hidden_syscalls.remove(&syscall_name);
-        } else {
-            self.hidden_syscalls.insert(syscall_name);
+        match target {
+            HideTarget::Syscall => {
+                let syscall_name = entry.syscall_name.clone();
+                if !self.hidden_syscalls.remove(&syscall_name) {
+                    self.hidden_syscalls.insert(syscall_name);
+                }
+                self.rebuild_display_lines();
+            }
+            HideTarget::Process => self.set_pid_hidden(entry.pid, was_hiding),
         }
-
-        self.rebuild_display_lines();
 
         // If we're showing hidden items (ghost mode), the item is still visible
         // Just keep cursor on it
@@ -1516,11 +1582,7 @@ impl App {
             .enumerate()
             .find(|(_, line)| {
                 let idx = line.entry_idx();
-                idx > entry_idx
-                    && (self.show_hidden
-                        || !self
-                            .hidden_syscalls
-                            .contains(&self.entries[idx].syscall_name))
+                idx > entry_idx && (self.show_hidden || !self.is_entry_hidden(&self.entries[idx]))
             })
             .map(|(i, _)| i)
     }
@@ -1531,10 +1593,7 @@ impl App {
             .enumerate()
             .find(|(_, line)| {
                 let idx = line.entry_idx();
-                self.show_hidden
-                    || !self
-                        .hidden_syscalls
-                        .contains(&self.entries[idx].syscall_name)
+                self.show_hidden || !self.is_entry_hidden(&self.entries[idx])
             })
             .map(|(i, _)| i)
     }
@@ -1548,6 +1607,84 @@ impl App {
         self.show_filter_modal = true;
         self.filter_modal_state.selected_index = 0;
         self.filter_modal_state.scroll_offset = 0;
+        self.filter_modal_state.inactive_position = (0, 0);
+    }
+
+    /// Switch the filter modal's tab, keeping each tab's position
+    pub fn set_filter_tab(&mut self, tab: FilterTab) {
+        let state = &mut self.filter_modal_state;
+        if state.active_tab == tab {
+            return;
+        }
+        let active_position = (state.selected_index, state.scroll_offset);
+        (state.selected_index, state.scroll_offset) = state.inactive_position;
+        state.inactive_position = active_position;
+        state.active_tab = tab;
+
+        self.modal_search_state = SearchState::new();
+    }
+
+    /// Number of items in the filter modal's active list
+    fn modal_list_len(&self) -> usize {
+        match self.filter_modal_state.active_tab {
+            FilterTab::Syscalls => self.filter_modal_state.syscall_list.len(),
+            FilterTab::Processes => self.process_tab.summaries.len(),
+        }
+    }
+
+    /// Text of an item in the filter modal's active list, used for search
+    fn modal_item_text(&self, idx: usize) -> String {
+        match self.filter_modal_state.active_tab {
+            FilterTab::Syscalls => self
+                .filter_modal_state
+                .syscall_list
+                .get(idx)
+                .map(|(name, _)| name.clone())
+                .unwrap_or_default(),
+            FilterTab::Processes => self
+                .process_tab
+                .summaries
+                .get(idx)
+                .map(|s| format!("{} {}", s.pid, self.process_tab.command_label(s.pid).0))
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Toggle the selected item of the filter modal's active list
+    fn toggle_modal_item(&mut self) {
+        let idx = self.filter_modal_state.selected_index;
+        match self.filter_modal_state.active_tab {
+            FilterTab::Syscalls => {
+                if let Some((syscall_name, _)) = self.filter_modal_state.syscall_list.get(idx) {
+                    let syscall_name = syscall_name.clone();
+                    if !self.hidden_syscalls.remove(&syscall_name) {
+                        self.hidden_syscalls.insert(syscall_name);
+                    }
+                    self.rebuild_display_lines();
+                }
+            }
+            FilterTab::Processes => {
+                if let Some(pid) = self.process_tab.summaries.get(idx).map(|s| s.pid) {
+                    let hidden = !self.process_tab.is_hidden(pid);
+                    self.set_pid_hidden(pid, hidden);
+                }
+            }
+        }
+    }
+
+    /// Hide all processes if none is hidden, otherwise show all
+    fn toggle_all_processes(&mut self) {
+        let hide = self.process_tab.hidden_pids.is_empty();
+        let pids: Vec<u32> = self.process_tab.summaries.iter().map(|s| s.pid).collect();
+        for pid in pids {
+            if hide {
+                self.process_tab.hidden_pids.insert(pid);
+            } else {
+                self.process_tab.hidden_pids.remove(&pid);
+            }
+        }
+        self.process_tab.rebuild_display_lines(&self.entries);
+        self.rebuild_display_lines();
     }
 
     pub fn close_filter_modal(&mut self) {
@@ -1600,8 +1737,7 @@ impl App {
                 }
             }
             KeyCode::Down | KeyCode::Char('j')
-                if self.filter_modal_state.selected_index + 1
-                    < self.filter_modal_state.syscall_list.len() =>
+                if self.filter_modal_state.selected_index + 1 < self.modal_list_len() =>
             {
                 self.filter_modal_state.selected_index += 1;
 
@@ -1628,15 +1764,11 @@ impl App {
             }
             KeyCode::PageDown => {
                 let scroll_amount = visible_height;
-                let max_index = self.filter_modal_state.syscall_list.len().saturating_sub(1);
+                let max_index = self.modal_list_len().saturating_sub(1);
                 self.filter_modal_state.selected_index =
                     (self.filter_modal_state.selected_index + scroll_amount).min(max_index);
 
-                let max_scroll = self
-                    .filter_modal_state
-                    .syscall_list
-                    .len()
-                    .saturating_sub(visible_height);
+                let max_scroll = self.modal_list_len().saturating_sub(visible_height);
                 self.filter_modal_state.scroll_offset =
                     (self.filter_modal_state.scroll_offset + scroll_amount).min(max_scroll);
             }
@@ -1653,15 +1785,11 @@ impl App {
             }
             KeyCode::Char('d') if event.modifiers.contains(KeyModifiers::CONTROL) => {
                 let scroll_amount = visible_height / 2;
-                let max_index = self.filter_modal_state.syscall_list.len().saturating_sub(1);
+                let max_index = self.modal_list_len().saturating_sub(1);
                 self.filter_modal_state.selected_index =
                     (self.filter_modal_state.selected_index + scroll_amount).min(max_index);
 
-                let max_scroll = self
-                    .filter_modal_state
-                    .syscall_list
-                    .len()
-                    .saturating_sub(visible_height);
+                let max_scroll = self.modal_list_len().saturating_sub(visible_height);
                 self.filter_modal_state.scroll_offset =
                     (self.filter_modal_state.scroll_offset + scroll_amount).min(max_scroll);
             }
@@ -1670,34 +1798,24 @@ impl App {
                 self.filter_modal_state.scroll_offset = 0;
             }
             KeyCode::End | KeyCode::Char('G') => {
-                let max_index = self.filter_modal_state.syscall_list.len().saturating_sub(1);
+                let max_index = self.modal_list_len().saturating_sub(1);
                 self.filter_modal_state.selected_index = max_index;
 
-                let max_scroll = self
-                    .filter_modal_state
-                    .syscall_list
-                    .len()
-                    .saturating_sub(visible_height);
+                let max_scroll = self.modal_list_len().saturating_sub(visible_height);
                 self.filter_modal_state.scroll_offset = max_scroll;
             }
             KeyCode::Char(' ') | KeyCode::Enter => {
-                // Toggle the selected syscall
-                if let Some((syscall_name, _)) = self
-                    .filter_modal_state
-                    .syscall_list
-                    .get(self.filter_modal_state.selected_index)
-                {
-                    let syscall_name = syscall_name.clone();
-                    if self.hidden_syscalls.contains(&syscall_name) {
-                        self.hidden_syscalls.remove(&syscall_name);
-                    } else {
-                        self.hidden_syscalls.insert(syscall_name);
-                    }
-                    self.rebuild_display_lines();
-                }
+                self.toggle_modal_item();
             }
-            KeyCode::Char('a') => {
-                self.toggle_all_syscalls();
+            KeyCode::Char('a') => match self.filter_modal_state.active_tab {
+                FilterTab::Syscalls => self.toggle_all_syscalls(),
+                FilterTab::Processes => self.toggle_all_processes(),
+            },
+            KeyCode::Left | KeyCode::Char('1') => {
+                self.set_filter_tab(FilterTab::Syscalls);
+            }
+            KeyCode::Right | KeyCode::Char('2') => {
+                self.set_filter_tab(FilterTab::Processes);
             }
             _ => {}
         }
@@ -2083,10 +2201,13 @@ impl App {
 
         let query_lower = self.modal_search_state.query.to_lowercase();
 
-        // Search in syscall names
-        for (idx, (syscall_name, _count)) in self.filter_modal_state.syscall_list.iter().enumerate()
-        {
-            if syscall_name.to_lowercase().contains(&query_lower) {
+        // Search in the active list
+        for idx in 0..self.modal_list_len() {
+            if self
+                .modal_item_text(idx)
+                .to_lowercase()
+                .contains(&query_lower)
+            {
                 self.modal_search_state.matches.push(idx);
             }
         }
@@ -2229,4 +2350,104 @@ pub fn split_arguments(args: &str) -> Vec<String> {
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::StraceParser;
+
+    fn app(lines: &[&str]) -> App {
+        let entries = StraceParser::new()
+            .parse_lines(lines.iter().map(|l| l.to_string()), false)
+            .unwrap();
+        let summary = SummaryStats {
+            total_syscalls: entries.len(),
+            failed_syscalls: 0,
+            signals: 0,
+            unfinished: 0,
+            unique_pids: Vec::new(),
+            total_duration: None,
+        };
+        App::new(entries, summary, None, None)
+    }
+
+    fn key(app: &mut App, code: KeyCode) {
+        app.handle_event(KeyEvent::from(code));
+    }
+
+    fn visible_pids(app: &App) -> Vec<u32> {
+        app.display_lines
+            .iter()
+            .map(|line| app.entries[line.entry_idx()].pid)
+            .collect()
+    }
+
+    const TRACE: &[&str] = &[
+        r#"1 execve("/bin/sh", ["sh"], 0x1 /* 1 var */) = 0"#,
+        "1 fork() = 2",
+        "2 getpid() = 2",
+        r#"2 execve("/bin/ls", ["ls"], 0x1 /* 1 var */) = 0"#,
+        "1 getpid() = 1",
+    ];
+
+    #[test]
+    fn test_hide_process_from_syscalls_tab() {
+        let mut app = app(TRACE);
+        app.selected_line = 2; // getpid of PID 2
+        key(&mut app, KeyCode::Char('p'));
+
+        assert_eq!(visible_pids(&app), vec![1, 1, 1]);
+        assert_eq!(app.selected_line, 2); // moved to the next visible entry
+        assert!(app.process_tab.is_hidden(2));
+
+        // Ghost mode shows it again
+        key(&mut app, KeyCode::Char('.'));
+        assert_eq!(visible_pids(&app), vec![1, 1, 2, 2, 1]);
+    }
+
+    #[test]
+    fn test_jump_to_hidden_process_turns_on_ghost_mode() {
+        let mut app = app(TRACE);
+        app.set_pid_hidden(2, true);
+        assert!(!app.show_hidden);
+
+        app.jump_to_entry(3);
+        assert!(app.show_hidden);
+        assert_eq!(app.display_lines[app.selected_line].entry_idx(), 3);
+    }
+
+    #[test]
+    fn test_filter_modal_tabs() {
+        let mut app = app(TRACE);
+
+        // `H` on the Processes tab opens the modal on its Processes list
+        key(&mut app, KeyCode::Char('2'));
+        key(&mut app, KeyCode::Char('H'));
+        assert!(app.show_filter_modal);
+        assert_eq!(app.filter_modal_state.active_tab, FilterTab::Processes);
+
+        // Space toggles the selected process in both tabs
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Char(' '));
+        assert!(app.process_tab.is_hidden(2));
+        assert_eq!(visible_pids(&app), vec![1, 1, 1]);
+
+        // Each list keeps its own position
+        key(&mut app, KeyCode::Left);
+        assert_eq!(app.filter_modal_state.active_tab, FilterTab::Syscalls);
+        assert_eq!(app.filter_modal_state.selected_index, 0);
+        key(&mut app, KeyCode::Char('2'));
+        assert_eq!(app.filter_modal_state.selected_index, 1);
+
+        // `a` shows all processes again (some are hidden)
+        key(&mut app, KeyCode::Char('a'));
+        assert!(app.process_tab.hidden_pids.is_empty());
+
+        // `H` on the Syscalls tab reopens the last used modal tab
+        key(&mut app, KeyCode::Esc);
+        key(&mut app, KeyCode::Char('1'));
+        key(&mut app, KeyCode::Char('H'));
+        assert_eq!(app.filter_modal_state.active_tab, FilterTab::Processes);
+    }
 }

@@ -217,6 +217,9 @@ pub struct ProcessLine {
 pub enum ProcessAction {
     None,
     JumpToEntry(usize),
+    /// A process was hidden or shown, so the Syscalls tab must be rebuilt
+    HiddenChanged,
+    OpenFilterModal,
 }
 
 pub struct ProcessTabState {
@@ -233,6 +236,10 @@ pub struct ProcessTabState {
     pub expanded_execs: HashSet<u32>,
     pub expanded_children: HashSet<u32>,
     pub search_state: SearchState,
+    /// Hidden processes, also read by the Syscalls tab
+    pub hidden_pids: HashSet<u32>,
+    /// Ghost mode: show hidden processes dimmed instead of removing them
+    pub show_hidden: bool,
 }
 
 const ROOT_PREFIX: TreePrefix = [TreeElement::Null; 4];
@@ -261,6 +268,8 @@ impl ProcessTabState {
             expanded_execs: HashSet::new(),
             expanded_children: HashSet::new(),
             search_state: SearchState::new(),
+            hidden_pids: HashSet::new(),
+            show_hidden: false,
         };
         state.rebuild_display_lines(entries);
         state
@@ -270,8 +279,31 @@ impl ProcessTabState {
         self.index_by_pid.get(&pid).map(|&i| &self.summaries[i])
     }
 
+    pub fn is_hidden(&self, pid: u32) -> bool {
+        self.hidden_pids.contains(&pid)
+    }
+
+    /// Hide or show a process, keeping the selection valid
+    pub fn set_pid_hidden(&mut self, pid: u32, hidden: bool, entries: &[SyscallEntry]) {
+        if hidden {
+            self.hidden_pids.insert(pid);
+        } else {
+            self.hidden_pids.remove(&pid);
+        }
+        self.rebuild_display_lines(entries);
+    }
+
     fn color(&self, pid: u32) -> Color {
         self.colors.get(&pid).copied().unwrap_or(Color::White)
+    }
+
+    /// Style for a line referring to another process: its graph color, or dimmed if hidden
+    fn reference_style(&self, pid: u32) -> Style {
+        if self.is_hidden(pid) {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default().fg(self.color(pid))
+        }
     }
 
     /// The command a process runs: its first successful exec, or else the command its parent
@@ -352,6 +384,9 @@ impl ProcessTabState {
         let mut lines = Vec::new();
         for summary in &self.summaries {
             let pid = summary.pid;
+            if !self.show_hidden && self.hidden_pids.contains(&pid) {
+                continue;
+            }
             lines.push(ProcessLine {
                 pid,
                 kind: ProcessLineKind::Row,
@@ -406,7 +441,8 @@ impl ProcessTabState {
                 .display_lines
                 .iter()
                 .position(|line| line.pid == pid && line.kind == kind)
-                .or_else(|| self.row_line(pid));
+                .or_else(|| self.row_line(pid))
+                .or_else(|| self.nearest_visible_row(pid));
             if let Some(pos) = pos {
                 self.selected_line = pos;
                 self.scroll_offset = pos.saturating_sub(screen_pos);
@@ -423,6 +459,15 @@ impl ProcessTabState {
 
     fn row_line(&self, pid: u32) -> Option<usize> {
         self.line_of(pid, ProcessLineKind::Row)
+    }
+
+    /// Row of the next visible process after `pid` (in list order), or else the previous one
+    fn nearest_visible_row(&self, pid: u32) -> Option<usize> {
+        let i = *self.index_by_pid.get(&pid)?;
+        self.summaries[i + 1..]
+            .iter()
+            .chain(self.summaries[..i].iter().rev())
+            .find_map(|s| self.row_line(s.pid))
     }
 
     fn line_of(&self, pid: u32, kind: ProcessLineKind) -> Option<usize> {
@@ -545,7 +590,7 @@ impl ProcessTabState {
                 };
                 // Same color as the parent's row, dimmed when it has no exec
                 let (cmd, dimmed) = self.command_label(parent);
-                let parent_style = Style::default().fg(self.color(parent));
+                let parent_style = self.reference_style(parent);
                 let mut spans = vec![
                     Span::styled("Parent: ", label),
                     Span::styled(format!("[{}] ", parent), parent_style),
@@ -659,7 +704,7 @@ impl ProcessTabState {
                     return Vec::new();
                 };
                 // Same color as the child's row, with an inherited command dimmed
-                let child_style = Style::default().fg(self.color(child));
+                let child_style = self.reference_style(child);
                 let mut spans = vec![Span::styled(format!("[{}] ", child), child_style)];
                 if let Some(child_summary) = self.summary(child) {
                     let kind = if child_summary.is_thread {
@@ -737,12 +782,33 @@ impl ProcessTabState {
                     self.select_row(pid);
                 }
             }
+            KeyCode::Char('h') => {
+                if let Some(pid) = self.selected().map(|line| line.pid) {
+                    let hidden = !self.is_hidden(pid);
+                    self.set_pid_hidden(pid, hidden, entries);
+                    return ProcessAction::HiddenChanged;
+                }
+            }
+            KeyCode::Char('.') => {
+                self.show_hidden = !self.show_hidden;
+                self.rebuild_display_lines(entries);
+            }
+            KeyCode::Char('H') => return ProcessAction::OpenFilterModal,
             KeyCode::Char('/') => self.start_search(),
             KeyCode::Char('n') if !self.search_state.query.is_empty() => self.search_next(),
             KeyCode::Char('N') if !self.search_state.query.is_empty() => self.search_previous(),
             _ => {}
         }
         ProcessAction::None
+    }
+
+    /// Select a process's row, turning on ghost mode if it is hidden
+    fn go_to_process(&mut self, pid: u32, entries: &[SyscallEntry]) {
+        if self.is_hidden(pid) && !self.show_hidden {
+            self.show_hidden = true;
+            self.rebuild_display_lines(entries);
+        }
+        self.select_row(pid);
     }
 
     /// Enter/Space: toggle a row, or follow a detail line to its target
@@ -776,13 +842,13 @@ impl ProcessTabState {
             }
             ProcessLineKind::Parent => {
                 if let Some(parent) = summary.parent_pid {
-                    self.select_row(parent);
+                    self.go_to_process(parent, entries);
                 }
                 return ProcessAction::None;
             }
             ProcessLineKind::Child(i) => {
                 if let Some(&child) = summary.children.get(i) {
-                    self.select_row(child);
+                    self.go_to_process(child, entries);
                 }
                 return ProcessAction::None;
             }
@@ -1191,6 +1257,58 @@ mod tests {
         assert_eq!(selected(&tab), (101, ProcessLineKind::Row));
         key(&mut tab, KeyCode::Right);
         assert!(!kinds(&tab).contains(&ProcessLineKind::Child(0)));
+    }
+
+    #[test]
+    fn test_hide_process_and_ghost_mode() {
+        let (entries, mut tab) = tab(TRACE);
+        let rows = |tab: &ProcessTabState| -> Vec<u32> {
+            tab.display_lines
+                .iter()
+                .filter(|l| l.kind == ProcessLineKind::Row)
+                .map(|l| l.pid)
+                .collect()
+        };
+
+        // `h` hides the selected process and moves to the next visible row
+        tab.selected_line = 1;
+        assert!(matches!(
+            tab.handle_key(KeyEvent::from(KeyCode::Char('h')), &entries),
+            ProcessAction::HiddenChanged
+        ));
+        assert!(tab.is_hidden(101));
+        assert_eq!(rows(&tab), vec![100, 102]);
+        assert_eq!(tab.display_lines[tab.selected_line].pid, 102);
+
+        // Hiding the last row moves back to the previous one
+        tab.handle_key(KeyEvent::from(KeyCode::Char('h')), &entries);
+        assert_eq!(rows(&tab), vec![100]);
+        assert_eq!(tab.display_lines[tab.selected_line].pid, 100);
+
+        // Ghost mode shows hidden rows again, and `h` there shows the process
+        tab.handle_key(KeyEvent::from(KeyCode::Char('.')), &entries);
+        assert_eq!(rows(&tab), vec![100, 101, 102]);
+        tab.selected_line = 2;
+        tab.handle_key(KeyEvent::from(KeyCode::Char('h')), &entries);
+        assert!(!tab.is_hidden(102));
+        assert_eq!(tab.display_lines[tab.selected_line].pid, 102);
+    }
+
+    #[test]
+    fn test_enter_on_hidden_child_turns_on_ghost_mode() {
+        let (entries, mut tab) = tab(TRACE);
+        tab.set_pid_hidden(101, true, &entries);
+
+        // Expand the root and its children
+        tab.expanded.insert(100);
+        tab.expanded_children.insert(100);
+        tab.rebuild_display_lines(&entries);
+        tab.select_line(100, ProcessLineKind::Child(0));
+        tab.handle_key(KeyEvent::from(KeyCode::Enter), &entries);
+
+        assert!(tab.show_hidden);
+        let selected = &tab.display_lines[tab.selected_line];
+        assert_eq!((selected.pid, selected.kind), (101, ProcessLineKind::Row));
     }
 
     #[test]
