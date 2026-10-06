@@ -18,10 +18,10 @@ path = "src/main.rs"
 nom = "8.0.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-clap = { version = "4.5.60", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"] }
 thiserror = "2.0.18"
 tempfile = "3.26.0"
-addr2line = { version = "0.26.0", default-features = false, features = [
+addr2line = { version = "0.27.1", default-features = false, features = [
     "loader",
     "cpp_demangle",
     "rustc-demangle",
@@ -29,16 +29,16 @@ addr2line = { version = "0.26.0", default-features = false, features = [
 ] }
 
 # TUI
-ratatui = { version = "0.30.0", default-features = false, features = [
+ratatui = { version = "0.30.2", default-features = false, features = [
     "crossterm",
     "layout-cache",
 ] }
 crossterm = "0.29.0"
 
 # Logging
-log = "0.4.29"
+log = "0.4.34"
 env_logger = { version = "0.11.9", default-features = false }
-dirs = "6.0"
+dirs = "7.0.0"
 
 [profile.release]
 codegen-units = 1
