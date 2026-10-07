@@ -109,6 +109,10 @@ pub struct FileLine {
 pub enum FileAction {
     None,
     JumpToEntry(usize),
+    /// The selected resource should be hidden or shown; the App owns the hidden set
+    ToggleHidden(usize),
+    /// Open the hide modal on the Files tab
+    OpenFilterModal,
 }
 
 /// What the Files tab needs from the rest of the app
@@ -117,6 +121,8 @@ pub struct FileCtx<'a> {
     pub entries: &'a [SyscallEntry],
     pub hidden_syscalls: &'a HashSet<String>,
     pub hidden_pids: &'a HashSet<u32>,
+    /// Resources hidden directly from the Files tab (indices into `files.resources`)
+    pub hidden_resources: &'a HashSet<usize>,
 }
 
 impl FileCtx<'_> {
@@ -182,14 +188,18 @@ impl FileTabState {
 
         let mut lines = Vec::new();
         for (r, resource) in ctx.files.resources.iter().enumerate() {
+            let resource_hidden = ctx.hidden_resources.contains(&r);
             let mut groups: Vec<Option<usize>> = (0..resource.lifetimes.len()).map(Some).collect();
             if !resource.path_accesses.is_empty() {
                 groups.push(None);
             }
+            // A resource hidden from the Files tab is treated as fully hidden, regardless of
+            // its individual accesses' syscall/process visibility.
             let group_visible = |group: Option<usize>| {
-                group_accesses(resource, group)
-                    .iter()
-                    .any(|a| !ctx.is_hidden(a))
+                !resource_hidden
+                    && group_accesses(resource, group)
+                        .iter()
+                        .any(|a| !ctx.is_hidden(a))
             };
             let resource_visible = groups.iter().any(|&g| group_visible(g));
             if !resource_visible && !self.show_hidden {
@@ -243,7 +253,7 @@ impl FileTabState {
                 let accesses: Vec<(usize, bool)> = group_accesses(resource, group)
                     .iter()
                     .enumerate()
-                    .map(|(idx, a)| (idx, ctx.is_hidden(a)))
+                    .map(|(idx, a)| (idx, resource_hidden || ctx.is_hidden(a)))
                     .filter(|&(_, hidden)| self.show_hidden || !hidden)
                     .collect();
                 let nested = App::build_nested_prefix(&prefix, is_last);
@@ -509,6 +519,12 @@ impl FileTabState {
                 self.show_hidden = !self.show_hidden;
                 self.rebuild_display_lines(ctx);
             }
+            KeyCode::Char('h') => {
+                if let Some(resource) = self.selected().map(|line| line.resource) {
+                    return FileAction::ToggleHidden(resource);
+                }
+            }
+            KeyCode::Char('H') => return FileAction::OpenFilterModal,
             KeyCode::Char('/') => self.start_search(),
             KeyCode::Char('n') if !self.search_state.query.is_empty() => self.search_next(),
             KeyCode::Char('N') if !self.search_state.query.is_empty() => self.search_previous(),
@@ -1126,6 +1142,7 @@ mod tests {
             entries: &entries,
             hidden_syscalls: &hidden_syscalls,
             hidden_pids: &hidden_pids,
+            hidden_resources: &HashSet::new(),
         };
         let mut state = FileTabState::new(&ctx);
         assert_eq!(
@@ -1162,6 +1179,7 @@ mod tests {
             entries: &entries,
             hidden_syscalls: &hidden_syscalls,
             hidden_pids: &hidden_pids,
+            hidden_resources: &HashSet::new(),
         };
         state.rebuild_display_lines(&ctx);
         assert_eq!(
@@ -1201,6 +1219,7 @@ mod tests {
             entries: &entries,
             hidden_syscalls: &empty_syscalls,
             hidden_pids: &empty_pids,
+            hidden_resources: &HashSet::new(),
         };
         let mut state = FileTabState::new(&ctx);
         state.expanded.insert(0);

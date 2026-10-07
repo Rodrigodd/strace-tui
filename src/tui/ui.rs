@@ -997,6 +997,7 @@ fn draw_file_list(f: &mut Frame, app: &mut App, area: Rect) {
         entries: &app.entries,
         hidden_syscalls: &app.hidden_syscalls,
         hidden_pids: &app.hidden_pids,
+        hidden_resources: &app.hidden_resources,
     };
     let graph = &app.process_graph;
     let pid_color = |pid: u32| graph.get_color(pid);
@@ -1081,10 +1082,15 @@ fn draw_file_list(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     if app.active_tab == Tab::Files {
         let mut footer_text = String::from(
-            "?: Help | q: Quit | 1-3: Tab | ↑↓/jk: Nav | ←→: Fold | Enter: Toggle/Jump | e/c: All | .: Ghost | /: Search",
+            "?: Help | q: Quit | 1-3: Tab | ↑↓/jk: Nav | ←→: Fold | Enter: Toggle/Jump | e/c: All | h: Hide | H: Filter | .: Ghost",
         );
         footer_text.push_str(&format!(" | Files: {}", app.files.resources.len()));
-        if app.files_tab.show_hidden {
+        if !app.hidden_resources.is_empty() {
+            footer_text.push_str(&format!(" | Hidden: {}", app.hidden_resources.len()));
+            if app.files_tab.show_hidden {
+                footer_text.push_str(" (shown)");
+            }
+        } else if app.files_tab.show_hidden {
             footer_text.push_str(" (hidden shown)");
         }
         let footer = Paragraph::new(footer_text).style(Style::default().fg(Color::DarkGray));
@@ -1202,6 +1208,7 @@ fn draw_help(f: &mut Frame) {
         Line::from("  h           Hide/show current syscall"),
         Line::from("  p           Hide/show current process"),
         Line::from("  h (Procs)   Hide/show current process"),
+        Line::from("  h (Files)   Hide/show current file"),
         Line::from("  H           Open filter modal"),
         Line::from("  .           Toggle show hidden"),
         Line::from(""),
@@ -1211,7 +1218,7 @@ fn draw_help(f: &mut Frame) {
         )),
         Line::from("  Space/Enter Toggle checkbox"),
         Line::from("  a           Toggle all"),
-        Line::from("  ←→/1/2      Syscalls/Processes list"),
+        Line::from("  ←→/1/2/3    Syscalls/Processes/Files"),
         Line::from("  Esc/H/q     Close modal"),
         Line::from(""),
         Line::from(Span::styled(
@@ -1309,6 +1316,7 @@ fn draw_filter_modal(f: &mut Frame, app: &mut App) {
     let total_items = match modal_state.active_tab {
         FilterTab::Syscalls => modal_state.syscall_list.len(),
         FilterTab::Processes => app.process_tab.summaries.len(),
+        FilterTab::Files => app.files.resources.len(),
     };
 
     // Only render visible items
@@ -1365,6 +1373,22 @@ fn draw_filter_modal(f: &mut Frame, app: &mut App) {
                         Span::styled(format!("[{}] ", pid), pid_style),
                         Span::styled(label, label_style),
                         Span::raw(format!(" ({} syscalls)", summary.syscall_count)),
+                    ]);
+                    (line, is_hidden)
+                }
+                FilterTab::Files => {
+                    let resource = &app.files.resources[idx];
+                    let is_hidden = app.hidden_resources.contains(&idx);
+                    let checkbox = if is_hidden { "[ ]" } else { "[✓]" };
+                    let name_style = if is_hidden || is_match || is_current_match {
+                        Style::default()
+                    } else {
+                        resource_style(resource)
+                    };
+                    let line = Line::from(vec![
+                        Span::raw(format!("{} ", checkbox)),
+                        Span::styled(resource.name.clone(), name_style),
+                        Span::raw(format!(" ({})", resource.kind.label())),
                     ]);
                     (line, is_hidden)
                 }

@@ -140,15 +140,27 @@ impl DisplayLine {
 pub enum FilterTab {
     Syscalls,
     Processes,
+    Files,
 }
 
 impl FilterTab {
-    pub const ALL: [FilterTab; 2] = [FilterTab::Syscalls, FilterTab::Processes];
+    pub const ALL: [FilterTab; 3] =
+        [FilterTab::Syscalls, FilterTab::Processes, FilterTab::Files];
+
+    /// Position in `ALL`, used to index the modal's per-tab saved positions
+    pub fn index(self) -> usize {
+        match self {
+            FilterTab::Syscalls => 0,
+            FilterTab::Processes => 1,
+            FilterTab::Files => 2,
+        }
+    }
 
     pub fn title(self) -> &'static str {
         match self {
             FilterTab::Syscalls => "1 Syscalls",
             FilterTab::Processes => "2 Processes",
+            FilterTab::Files => "3 Files",
         }
     }
 }
@@ -160,8 +172,10 @@ pub struct FilterModalState {
     /// Position in the active tab's list
     pub selected_index: usize,
     pub scroll_offset: usize,
-    /// Position in the other tab's list, swapped in when switching tabs
-    pub inactive_position: (usize, usize),
+    /// Saved (selected_index, scroll_offset) for every tab, indexed by `FilterTab::index`.
+    /// The active tab's live position is in `selected_index`/`scroll_offset`; the others
+    /// are swapped in and out of here on `set_filter_tab`.
+    pub positions: [(usize, usize); 3],
 }
 
 pub struct SearchState {
@@ -211,6 +225,11 @@ pub struct App {
     pub hidden_syscalls: HashSet<String>,
     /// Hidden processes, shared by the Syscalls, Processes and Files tabs
     pub hidden_pids: HashSet<u32>,
+    /// Hidden resources (indices into `files.resources`), set from the Files tab
+    pub hidden_resources: HashSet<usize>,
+    /// Cache of entry indices hidden because every resource they touch is hidden.
+    /// Rebuilt by `recompute_hidden_file_entries` whenever `hidden_resources` changes.
+    pub hidden_file_entries: HashSet<usize>,
     pub show_hidden: bool,
     pub show_filter_modal: bool,
     pub filter_modal_state: FilterModalState,
@@ -247,6 +266,7 @@ impl App {
             entries: &entries,
             hidden_syscalls: &HashSet::new(),
             hidden_pids: &HashSet::new(),
+            hidden_resources: &HashSet::new(),
         });
 
         // Build syscall list for filter modal
@@ -313,6 +333,8 @@ impl App {
             last_collapsed_scroll: None,
             hidden_syscalls,
             hidden_pids: HashSet::new(),
+            hidden_resources: HashSet::new(),
+            hidden_file_entries: HashSet::new(),
             show_hidden: false,
             show_filter_modal: false,
             filter_modal_state: FilterModalState {
@@ -320,7 +342,7 @@ impl App {
                 active_tab: FilterTab::Syscalls,
                 selected_index: 0,
                 scroll_offset: 0,
-                inactive_position: (0, 0),
+                positions: [(0, 0); 3],
             },
             search_state: SearchState::new(),
             modal_search_state: SearchState::new(),
@@ -431,7 +453,7 @@ impl App {
 
         for (idx, entry) in self.entries.iter().enumerate() {
             // Check if this syscall should be hidden
-            let is_hidden = self.is_entry_hidden(entry);
+            let is_hidden = self.is_entry_hidden(idx);
 
             // Skip hidden items unless show_hidden is true
             if is_hidden && !self.show_hidden {
@@ -691,6 +713,7 @@ impl App {
             entries: &self.entries,
             hidden_syscalls: &self.hidden_syscalls,
             hidden_pids: &self.hidden_pids,
+            hidden_resources: &self.hidden_resources,
         };
         f(&mut self.files_tab, &ctx)
     }
@@ -806,6 +829,14 @@ impl App {
             match self.with_files_tab(|tab, ctx| tab.handle_key(event, ctx)) {
                 FileAction::None => {}
                 FileAction::JumpToEntry(idx) => self.jump_to_entry(idx),
+                FileAction::ToggleHidden(resource) => {
+                    let hidden = !self.hidden_resources.contains(&resource);
+                    self.set_resource_hidden(resource, hidden);
+                }
+                FileAction::OpenFilterModal => {
+                    self.open_filter_modal();
+                    self.set_filter_tab(FilterTab::Files);
+                }
             }
             return;
         }
@@ -932,10 +963,10 @@ impl App {
     /// Switch to the Syscalls tab with the given entry selected, showing hidden syscalls as
     /// ghosts if the entry is hidden.
     pub fn jump_to_entry(&mut self, entry_idx: usize) {
-        let Some(entry) = self.entries.get(entry_idx) else {
+        let Some(_entry) = self.entries.get(entry_idx) else {
             return;
         };
-        if !self.show_hidden && self.is_entry_hidden(entry) {
+        if !self.show_hidden && self.is_entry_hidden(entry_idx) {
             self.show_hidden = true;
             self.rebuild_display_lines();
         }
@@ -1604,8 +1635,15 @@ impl App {
     }
 
     // Filter management methods
-    /// Whether an entry is hidden, by its syscall name or by its process
-    pub fn is_entry_hidden(&self, entry: &SyscallEntry) -> bool {
+    /// Whether an entry is hidden: by its syscall name, its process, or because
+    /// every resource it touches is hidden.
+    pub fn is_entry_hidden(&self, entry_idx: usize) -> bool {
+        if self.hidden_file_entries.contains(&entry_idx) {
+            return true;
+        }
+        let Some(entry) = self.entries.get(entry_idx) else {
+            return false;
+        };
         self.hidden_syscalls.contains(&entry.syscall_name) || self.hidden_pids.contains(&entry.pid)
     }
 
@@ -1619,6 +1657,49 @@ impl App {
         self.process_tab
             .rebuild_display_lines(&self.entries, &self.hidden_pids);
         self.rebuild_display_lines();
+    }
+
+    /// Hide or show a resource (and so every entry whose touched resources are all hidden)
+    pub fn set_resource_hidden(&mut self, resource: usize, hidden: bool) {
+        if hidden {
+            self.hidden_resources.insert(resource);
+        } else {
+            self.hidden_resources.remove(&resource);
+        }
+        self.recompute_hidden_file_entries();
+        self.rebuild_display_lines();
+        self.files_tab.dirty = true;
+    }
+
+    /// Hide all resources if none is hidden, otherwise show all
+    fn toggle_all_resources(&mut self) {
+        let hide = self.hidden_resources.is_empty();
+        if hide {
+            self.hidden_resources = (0..self.files.resources.len()).collect();
+        } else {
+            self.hidden_resources.clear();
+        }
+        self.recompute_hidden_file_entries();
+        self.rebuild_display_lines();
+        self.files_tab.dirty = true;
+    }
+
+    /// Rebuild `hidden_file_entries` from `hidden_resources`: an entry is hidden only
+    /// when it touches at least one resource and *every* resource it touches is hidden.
+    fn recompute_hidden_file_entries(&mut self) {
+        self.hidden_file_entries.clear();
+        if self.hidden_resources.is_empty() {
+            return;
+        }
+        for (&entry_idx, refs) in &self.files.by_entry {
+            if !refs.is_empty()
+                && refs
+                    .iter()
+                    .all(|r| self.hidden_resources.contains(&r.resource))
+            {
+                self.hidden_file_entries.insert(entry_idx);
+            }
+        }
     }
 
     /// Toggle the visibility of the selected entry's syscall name or process
@@ -1698,7 +1779,7 @@ impl App {
             .enumerate()
             .find(|(_, line)| {
                 let idx = line.entry_idx();
-                idx > entry_idx && (self.show_hidden || !self.is_entry_hidden(&self.entries[idx]))
+                idx > entry_idx && (self.show_hidden || !self.is_entry_hidden(idx))
             })
             .map(|(i, _)| i)
     }
@@ -1709,7 +1790,7 @@ impl App {
             .enumerate()
             .find(|(_, line)| {
                 let idx = line.entry_idx();
-                self.show_hidden || !self.is_entry_hidden(&self.entries[idx])
+                self.show_hidden || !self.is_entry_hidden(idx)
             })
             .map(|(i, _)| i)
     }
@@ -1723,7 +1804,7 @@ impl App {
         self.show_filter_modal = true;
         self.filter_modal_state.selected_index = 0;
         self.filter_modal_state.scroll_offset = 0;
-        self.filter_modal_state.inactive_position = (0, 0);
+        self.filter_modal_state.positions = [(0, 0); 3];
     }
 
     /// Switch the filter modal's tab, keeping each tab's position
@@ -1732,9 +1813,9 @@ impl App {
         if state.active_tab == tab {
             return;
         }
-        let active_position = (state.selected_index, state.scroll_offset);
-        (state.selected_index, state.scroll_offset) = state.inactive_position;
-        state.inactive_position = active_position;
+        // Save the current tab's position, then restore the target tab's.
+        state.positions[state.active_tab.index()] = (state.selected_index, state.scroll_offset);
+        (state.selected_index, state.scroll_offset) = state.positions[tab.index()];
         state.active_tab = tab;
 
         self.modal_search_state = SearchState::new();
@@ -1745,6 +1826,7 @@ impl App {
         match self.filter_modal_state.active_tab {
             FilterTab::Syscalls => self.filter_modal_state.syscall_list.len(),
             FilterTab::Processes => self.process_tab.summaries.len(),
+            FilterTab::Files => self.files.resources.len(),
         }
     }
 
@@ -1762,6 +1844,12 @@ impl App {
                 .summaries
                 .get(idx)
                 .map(|s| format!("{} {}", s.pid, self.process_tab.command_label(s.pid).0))
+                .unwrap_or_default(),
+            FilterTab::Files => self
+                .files
+                .resources
+                .get(idx)
+                .map(|r| r.name.clone())
                 .unwrap_or_default(),
         }
     }
@@ -1783,6 +1871,12 @@ impl App {
                 if let Some(pid) = self.process_tab.summaries.get(idx).map(|s| s.pid) {
                     let hidden = !self.hidden_pids.contains(&pid);
                     self.set_pid_hidden(pid, hidden);
+                }
+            }
+            FilterTab::Files => {
+                if idx < self.files.resources.len() {
+                    let hidden = !self.hidden_resources.contains(&idx);
+                    self.set_resource_hidden(idx, hidden);
                 }
             }
         }
@@ -1927,12 +2021,20 @@ impl App {
             KeyCode::Char('a') => match self.filter_modal_state.active_tab {
                 FilterTab::Syscalls => self.toggle_all_syscalls(),
                 FilterTab::Processes => self.toggle_all_processes(),
+                FilterTab::Files => self.toggle_all_resources(),
             },
-            KeyCode::Left | KeyCode::Char('1') => {
-                self.set_filter_tab(FilterTab::Syscalls);
+            KeyCode::Char('1') => self.set_filter_tab(FilterTab::Syscalls),
+            KeyCode::Char('2') => self.set_filter_tab(FilterTab::Processes),
+            KeyCode::Char('3') => self.set_filter_tab(FilterTab::Files),
+            KeyCode::Left => {
+                let idx = self.filter_modal_state.active_tab.index();
+                let prev = (idx + FilterTab::ALL.len() - 1) % FilterTab::ALL.len();
+                self.set_filter_tab(FilterTab::ALL[prev]);
             }
-            KeyCode::Right | KeyCode::Char('2') => {
-                self.set_filter_tab(FilterTab::Processes);
+            KeyCode::Right => {
+                let idx = self.filter_modal_state.active_tab.index();
+                let next = (idx + 1) % FilterTab::ALL.len();
+                self.set_filter_tab(FilterTab::ALL[next]);
             }
             _ => {}
         }
@@ -2506,5 +2608,86 @@ mod tests {
         key(&mut app, KeyCode::Char('1'));
         key(&mut app, KeyCode::Char('H'));
         assert_eq!(app.filter_modal_state.active_tab, FilterTab::Processes);
+    }
+
+    // A trace touching two files and one no-resource syscall.
+    // Resource 0 = /a (openat/read/close), resource 1 = /b (failed stat).
+    const FILE_TRACE: &[&str] = &[
+        r#"1 openat(AT_FDCWD, "/a", O_RDONLY) = 3"#,
+        r#"1 read(3, "x", 1) = 1"#,
+        r#"1 close(3) = 0"#,
+        r#"1 stat("/b", 0x7fff) = -1 ENOENT (No such file or directory)"#,
+        "1 getpid() = 1",
+    ];
+
+    /// Entry indices still visible in the Syscalls tab
+    fn visible_entry_idxs(app: &App) -> Vec<usize> {
+        app.display_lines
+            .iter()
+            .filter_map(|line| match line {
+                DisplayLine::SyscallHeader { entry_idx, .. } => Some(*entry_idx),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_hide_resource_hides_its_syscalls() {
+        let mut app = app(FILE_TRACE);
+        // Resource 0 is /a; hiding it hides openat/read/close (entries 0,1,2) but not
+        // the /b stat (entry 3) or the no-resource getpid (entry 4).
+        app.set_resource_hidden(0, true);
+        assert_eq!(visible_entry_idxs(&app), vec![3, 4]);
+
+        // Ghost mode brings the hidden entries back
+        app.show_hidden = true;
+        app.rebuild_display_lines();
+        assert_eq!(visible_entry_idxs(&app), vec![0, 1, 2, 3, 4]);
+
+        // Showing the resource again restores it
+        app.show_hidden = false;
+        app.set_resource_hidden(0, false);
+        assert_eq!(visible_entry_idxs(&app), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_no_resource_syscall_never_hidden_by_file_hiding() {
+        let mut app = app(FILE_TRACE);
+        // Hide every resource; getpid (entry 4) touches none, so it stays visible.
+        app.set_resource_hidden(0, true);
+        app.set_resource_hidden(1, true);
+        assert!(!app.is_entry_hidden(4));
+        assert_eq!(visible_entry_idxs(&app), vec![4]);
+    }
+
+    #[test]
+    fn test_files_tab_h_hides_resource() {
+        let mut app = app(FILE_TRACE);
+        key(&mut app, KeyCode::Char('3')); // Files tab
+        app.sync_files_tab();
+        // Select the first resource row (/a) and hide it.
+        app.files_tab.selected_line = 0;
+        key(&mut app, KeyCode::Char('h'));
+        assert!(app.hidden_resources.contains(&0));
+        // Its syscalls are hidden on the Syscalls tab too.
+        assert_eq!(visible_entry_idxs(&app), vec![3, 4]);
+    }
+
+    #[test]
+    fn test_files_modal_tab_toggle_all() {
+        let mut app = app(FILE_TRACE);
+        key(&mut app, KeyCode::Char('3'));
+        key(&mut app, KeyCode::Char('H'));
+        assert_eq!(app.filter_modal_state.active_tab, FilterTab::Files);
+
+        // `a` hides every resource, so only the no-resource getpid stays.
+        key(&mut app, KeyCode::Char('a'));
+        assert_eq!(app.hidden_resources.len(), 2);
+        assert_eq!(visible_entry_idxs(&app), vec![4]);
+
+        // `a` again shows them all.
+        key(&mut app, KeyCode::Char('a'));
+        assert!(app.hidden_resources.is_empty());
+        assert_eq!(visible_entry_idxs(&app), vec![0, 1, 2, 3, 4]);
     }
 }
