@@ -200,6 +200,15 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let end = (app.scroll_offset + visible_height).min(app.display_lines.len());
     let width = area.width as usize;
 
+    // Hidden processes collapse their graph column, but only when ghost mode is off: with ghost
+    // mode on, hidden entries still render (dimmed), so their lanes must stay drawn.
+    let empty_hidden = std::collections::HashSet::new();
+    let graph_hidden = if app.process_tab.show_hidden {
+        &empty_hidden
+    } else {
+        &app.process_tab.hidden_pids
+    };
+
     for line_idx in start..end {
         let display_line = &app.display_lines[line_idx];
 
@@ -237,7 +246,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     // Get graph for this entry
                     let graph_chars = app
                         .process_graph
-                        .render_graph_for_entry(*entry_idx, &app.entries);
+                        .render_graph_for_entry(*entry_idx, &app.entries, graph_hidden);
                     let has_graph = !graph_chars.is_empty();
                     let graph_len = if has_graph { graph_chars.len() + 4 } else { 0 }; // +4 for "  "+"  "
 
@@ -311,7 +320,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     // Get graph for this entry
                     let graph_chars = app
                         .process_graph
-                        .render_graph_for_entry(*entry_idx, &app.entries);
+                        .render_graph_for_entry(*entry_idx, &app.entries, graph_hidden);
                     let has_graph = !graph_chars.is_empty();
                     let graph_len = if has_graph { graph_chars.len() + 4 } else { 0 }; // +4 for "  "+"  "
 
@@ -825,7 +834,15 @@ fn draw_process_list(f: &mut Frame, app: &mut App, area: Rect) {
                 row_style
             };
 
-            let graph_chars = app.process_graph.render_process_start(line.pid);
+            let graph_hidden = if tab.show_hidden {
+                None
+            } else {
+                Some(&tab.hidden_pids)
+            };
+            let empty_hidden = std::collections::HashSet::new();
+            let graph_chars = app
+                .process_graph
+                .render_process_start(line.pid, graph_hidden.unwrap_or(&empty_hidden));
             let graph_len = if graph_chars.is_empty() {
                 0
             } else {

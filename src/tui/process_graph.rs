@@ -175,6 +175,50 @@ impl ProcessGraph {
             .unwrap_or(Color::White)
     }
 
+    /// Which columns stay visible when `hidden` processes are removed.
+    ///
+    /// A column is dropped only when *every* process that ever occupied it is hidden; a column
+    /// shared over time between a hidden and a visible process is kept. Returns a bitmask indexed
+    /// by original column: `true` means the column is still drawn. A column with no process at all
+    /// is kept (defensive; this should not happen).
+    fn visible_columns(&self, hidden: &HashSet<u32>) -> Vec<bool> {
+        let mut keep = vec![false; self.max_columns];
+        let mut has_process = vec![false; self.max_columns];
+        for info in self.processes.values() {
+            if info.column >= self.max_columns {
+                continue;
+            }
+            has_process[info.column] = true;
+            if !hidden.contains(&info.pid) {
+                keep[info.column] = true;
+            }
+        }
+        for col in 0..self.max_columns {
+            if !has_process[col] {
+                keep[col] = true;
+            }
+        }
+        keep
+    }
+
+    /// Drop the cells of fully-hidden columns, closing the gap so the remaining lanes stay
+    /// contiguous. `graph` holds one cell per original column (what the `render_*` methods build).
+    fn filter_hidden_columns(
+        &self,
+        graph: Vec<(char, Color)>,
+        hidden: &HashSet<u32>,
+    ) -> Vec<(char, Color)> {
+        if hidden.is_empty() || graph.is_empty() {
+            return graph;
+        }
+        let keep = self.visible_columns(hidden);
+        graph
+            .into_iter()
+            .enumerate()
+            .filter_map(|(col, cell)| keep.get(col).copied().unwrap_or(true).then_some(cell))
+            .collect()
+    }
+
     pub fn get_color_for_column(&self, column: usize, entry_idx: usize) -> Color {
         self.processes
             .values()
@@ -191,6 +235,7 @@ impl ProcessGraph {
         &self,
         entry_idx: usize,
         entries: &[SyscallEntry],
+        hidden: &HashSet<u32>,
     ) -> Vec<(char, Color)> {
         if !self.enabled {
             return Vec::new();
@@ -312,12 +357,12 @@ impl ProcessGraph {
             }
         }
 
-        graph
+        self.filter_hidden_columns(graph, hidden)
     }
 
     /// Render the graph for the start of a process: `●` at its own column, and a branch from the
     /// parent's column (`├─●` or `●─┤`) if it has a known parent.
-    pub fn render_process_start(&self, pid: u32) -> Vec<(char, Color)> {
+    pub fn render_process_start(&self, pid: u32, hidden: &HashSet<u32>) -> Vec<(char, Color)> {
         if !self.enabled {
             return Vec::new();
         }
@@ -370,7 +415,7 @@ impl ProcessGraph {
             graph.push((ch, col_color));
         }
 
-        graph
+        self.filter_hidden_columns(graph, hidden)
     }
 
     fn is_active_at(&self, column: usize, entry_idx: usize) -> bool {
@@ -396,7 +441,16 @@ mod tests {
 
     fn chars(graph: &ProcessGraph, pid: u32) -> String {
         graph
-            .render_process_start(pid)
+            .render_process_start(pid, &HashSet::new())
+            .into_iter()
+            .map(|(c, _)| c)
+            .collect()
+    }
+
+    fn chars_hidden(graph: &ProcessGraph, pid: u32, hidden: &[u32]) -> String {
+        let hidden: HashSet<u32> = hidden.iter().copied().collect();
+        graph
+            .render_process_start(pid, &hidden)
             .into_iter()
             .map(|(c, _)| c)
             .collect()
@@ -462,4 +516,76 @@ mod tests {
         assert_eq!(graph.processes[&4].column, 1);
         assert_eq!(chars(&graph, 4), "│●┤");
     }
+
+    #[test]
+    fn hidden_process_column_is_dropped() {
+        // All three stay alive through process 3's start, so columns are distinct (0, 1, 2).
+        let graph = build(&[
+            "1 fork() = 2",
+            "1 fork() = 3",
+            "2 getpid() = 2",
+            "3 getpid() = 3",
+            "2 +++ exited with 0 +++",
+            "3 +++ exited with 0 +++",
+            "1 +++ exited with 0 +++",
+        ]);
+        assert_eq!(graph.processes[&1].column, 0);
+        assert_eq!(graph.processes[&2].column, 1);
+        assert_eq!(graph.processes[&3].column, 2);
+        // Process 3 branches from parent 1 (column 0), with process 2 alive in column 1 between.
+        assert_eq!(chars(&graph, 3), "├─●");
+        // Hiding process 2 removes the middle lane; the parent→child connector stays contiguous.
+        assert_eq!(chars_hidden(&graph, 3, &[2]), "├●");
+        // Hiding process 1 (parent) drops the leftmost column.
+        assert_eq!(chars_hidden(&graph, 3, &[1]), "─●");
+    }
+
+    #[test]
+    fn column_shared_with_visible_process_is_kept() {
+        let graph = build(&[
+            "1 fork() = 2",
+            "2 +++ exited with 0 +++",
+            "1 fork() = 3",
+            "3 getpid() = 3",
+        ]);
+        // Process 3 reuses process 2's freed column 1.
+        assert_eq!(graph.processes[&2].column, graph.processes[&3].column);
+        // Hiding process 2 must NOT drop column 1, since visible process 3 shares it.
+        assert_eq!(chars_hidden(&graph, 3, &[2]), chars(&graph, 3));
+    }
+
+    #[test]
+    fn hidden_middle_lane_in_syscall_graph_is_dropped() {
+        let entries = StraceParser::new()
+            .parse_lines(
+                [
+                    "1 fork() = 2",
+                    "2 fork() = 3",
+                    "1 getpid() = 1",
+                    "3 getpid() = 3",
+                    "2 getpid() = 2",
+                ]
+                .iter()
+                .map(|l| l.to_string()),
+                false,
+            )
+            .unwrap();
+        let graph = ProcessGraph::build(&entries);
+        // Entry 2 is "1 getpid()": all three lanes active -> "●││".
+        let full: String = graph
+            .render_graph_for_entry(2, &entries, &HashSet::new())
+            .into_iter()
+            .map(|(c, _)| c)
+            .collect();
+        assert_eq!(full, "●││");
+        // Hide process 2 (middle lane, column 1): its lane is dropped and the gap closes.
+        let hidden: HashSet<u32> = [2].into_iter().collect();
+        let filtered: String = graph
+            .render_graph_for_entry(2, &entries, &hidden)
+            .into_iter()
+            .map(|(c, _)| c)
+            .collect();
+        assert_eq!(filtered, "●│");
+    }
 }
+
