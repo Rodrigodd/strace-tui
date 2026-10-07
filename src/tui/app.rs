@@ -209,6 +209,8 @@ pub struct App {
 
     // Filter state
     pub hidden_syscalls: HashSet<String>,
+    /// Hidden processes, shared by the Syscalls, Processes and Files tabs
+    pub hidden_pids: HashSet<u32>,
     pub show_hidden: bool,
     pub show_filter_modal: bool,
     pub filter_modal_state: FilterModalState,
@@ -310,6 +312,7 @@ impl App {
             last_collapsed_position: None,
             last_collapsed_scroll: None,
             hidden_syscalls,
+            hidden_pids: HashSet::new(),
             show_hidden: false,
             show_filter_modal: false,
             filter_modal_state: FilterModalState {
@@ -687,7 +690,7 @@ impl App {
             files: &self.files,
             entries: &self.entries,
             hidden_syscalls: &self.hidden_syscalls,
-            hidden_pids: &self.process_tab.hidden_pids,
+            hidden_pids: &self.hidden_pids,
         };
         f(&mut self.files_tab, &ctx)
     }
@@ -739,7 +742,8 @@ impl App {
     pub fn handle_event(&mut self, event: KeyEvent) {
         // Priority 1: Search mode
         if self.active_tab == Tab::Processes && self.process_tab.search_state.active {
-            self.process_tab.handle_key(event, &self.entries);
+            self.process_tab
+                .handle_key(event, &self.entries, &self.hidden_pids);
             return;
         }
         if self.active_tab == Tab::Files && self.files_tab.search_state.active {
@@ -807,10 +811,16 @@ impl App {
         }
 
         if self.active_tab == Tab::Processes {
-            match self.process_tab.handle_key(event, &self.entries) {
+            match self
+                .process_tab
+                .handle_key(event, &self.entries, &self.hidden_pids)
+            {
                 ProcessAction::None => {}
                 ProcessAction::JumpToEntry(idx) => self.jump_to_entry(idx),
-                ProcessAction::HiddenChanged => self.rebuild_display_lines(),
+                ProcessAction::ToggleHidden(pid) => {
+                    let hidden = !self.hidden_pids.contains(&pid);
+                    self.set_pid_hidden(pid, hidden);
+                }
                 ProcessAction::OpenFilterModal => {
                     self.open_filter_modal();
                     self.set_filter_tab(FilterTab::Processes);
@@ -1596,12 +1606,18 @@ impl App {
     // Filter management methods
     /// Whether an entry is hidden, by its syscall name or by its process
     pub fn is_entry_hidden(&self, entry: &SyscallEntry) -> bool {
-        self.hidden_syscalls.contains(&entry.syscall_name) || self.process_tab.is_hidden(entry.pid)
+        self.hidden_syscalls.contains(&entry.syscall_name) || self.hidden_pids.contains(&entry.pid)
     }
 
-    /// Hide or show a process in both tabs
+    /// Hide or show a process in every tab
     pub fn set_pid_hidden(&mut self, pid: u32, hidden: bool) {
-        self.process_tab.set_pid_hidden(pid, hidden, &self.entries);
+        if hidden {
+            self.hidden_pids.insert(pid);
+        } else {
+            self.hidden_pids.remove(&pid);
+        }
+        self.process_tab
+            .rebuild_display_lines(&self.entries, &self.hidden_pids);
         self.rebuild_display_lines();
     }
 
@@ -1615,7 +1631,7 @@ impl App {
         let entry = &self.entries[entry_idx];
         let was_hiding = match target {
             HideTarget::Syscall => !self.hidden_syscalls.contains(&entry.syscall_name),
-            HideTarget::Process => !self.process_tab.is_hidden(entry.pid),
+            HideTarget::Process => !self.hidden_pids.contains(&entry.pid),
         };
 
         // Save screen position (0 = top of screen, increases downward)
@@ -1765,7 +1781,7 @@ impl App {
             }
             FilterTab::Processes => {
                 if let Some(pid) = self.process_tab.summaries.get(idx).map(|s| s.pid) {
-                    let hidden = !self.process_tab.is_hidden(pid);
+                    let hidden = !self.hidden_pids.contains(&pid);
                     self.set_pid_hidden(pid, hidden);
                 }
             }
@@ -1774,16 +1790,17 @@ impl App {
 
     /// Hide all processes if none is hidden, otherwise show all
     fn toggle_all_processes(&mut self) {
-        let hide = self.process_tab.hidden_pids.is_empty();
+        let hide = self.hidden_pids.is_empty();
         let pids: Vec<u32> = self.process_tab.summaries.iter().map(|s| s.pid).collect();
         for pid in pids {
             if hide {
-                self.process_tab.hidden_pids.insert(pid);
+                self.hidden_pids.insert(pid);
             } else {
-                self.process_tab.hidden_pids.remove(&pid);
+                self.hidden_pids.remove(&pid);
             }
         }
-        self.process_tab.rebuild_display_lines(&self.entries);
+        self.process_tab
+            .rebuild_display_lines(&self.entries, &self.hidden_pids);
         self.rebuild_display_lines();
     }
 
@@ -2439,7 +2456,7 @@ mod tests {
 
         assert_eq!(visible_pids(&app), vec![1, 1, 1]);
         assert_eq!(app.selected_line, 2); // moved to the next visible entry
-        assert!(app.process_tab.is_hidden(2));
+        assert!(app.hidden_pids.contains(&2));
 
         // Ghost mode shows it again
         key(&mut app, KeyCode::Char('.'));
@@ -2470,7 +2487,7 @@ mod tests {
         // Space toggles the selected process in both tabs
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Char(' '));
-        assert!(app.process_tab.is_hidden(2));
+        assert!(app.hidden_pids.contains(&2));
         assert_eq!(visible_pids(&app), vec![1, 1, 1]);
 
         // Each list keeps its own position
@@ -2482,7 +2499,7 @@ mod tests {
 
         // `a` shows all processes again (some are hidden)
         key(&mut app, KeyCode::Char('a'));
-        assert!(app.process_tab.hidden_pids.is_empty());
+        assert!(app.hidden_pids.is_empty());
 
         // `H` on the Syscalls tab reopens the last used modal tab
         key(&mut app, KeyCode::Esc);

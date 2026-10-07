@@ -218,8 +218,8 @@ pub struct ProcessLine {
 pub enum ProcessAction {
     None,
     JumpToEntry(usize),
-    /// A process was hidden or shown, so the Syscalls tab must be rebuilt
-    HiddenChanged,
+    /// The selected process should be hidden or shown; the App owns the hidden set
+    ToggleHidden(u32),
     OpenFilterModal,
 }
 
@@ -237,8 +237,6 @@ pub struct ProcessTabState {
     pub expanded_execs: HashSet<u32>,
     pub expanded_children: HashSet<u32>,
     pub search_state: SearchState,
-    /// Hidden processes, also read by the Syscalls tab
-    pub hidden_pids: HashSet<u32>,
     /// Ghost mode: show hidden processes dimmed instead of removing them
     pub show_hidden: bool,
 }
@@ -269,10 +267,9 @@ impl ProcessTabState {
             expanded_execs: HashSet::new(),
             expanded_children: HashSet::new(),
             search_state: SearchState::new(),
-            hidden_pids: HashSet::new(),
             show_hidden: false,
         };
-        state.rebuild_display_lines(entries);
+        state.rebuild_display_lines(entries, &HashSet::new());
         state
     }
 
@@ -280,18 +277,8 @@ impl ProcessTabState {
         self.index_by_pid.get(&pid).map(|&i| &self.summaries[i])
     }
 
-    pub fn is_hidden(&self, pid: u32) -> bool {
-        self.hidden_pids.contains(&pid)
-    }
-
-    /// Hide or show a process, keeping the selection valid
-    pub fn set_pid_hidden(&mut self, pid: u32, hidden: bool, entries: &[SyscallEntry]) {
-        if hidden {
-            self.hidden_pids.insert(pid);
-        } else {
-            self.hidden_pids.remove(&pid);
-        }
-        self.rebuild_display_lines(entries);
+    pub fn is_hidden(hidden_pids: &HashSet<u32>, pid: u32) -> bool {
+        hidden_pids.contains(&pid)
     }
 
     fn color(&self, pid: u32) -> Color {
@@ -299,8 +286,8 @@ impl ProcessTabState {
     }
 
     /// Style for a line referring to another process: its graph color, or dimmed if hidden
-    fn reference_style(&self, pid: u32) -> Style {
-        if self.is_hidden(pid) {
+    fn reference_style(&self, hidden_pids: &HashSet<u32>, pid: u32) -> Style {
+        if Self::is_hidden(hidden_pids, pid) {
             Style::default().fg(Color::DarkGray)
         } else {
             Style::default().fg(self.color(pid))
@@ -375,7 +362,7 @@ impl ProcessTabState {
         kinds
     }
 
-    pub fn rebuild_display_lines(&mut self, entries: &[SyscallEntry]) {
+    pub fn rebuild_display_lines(&mut self, entries: &[SyscallEntry], hidden_pids: &HashSet<u32>) {
         let previous = self
             .display_lines
             .get(self.selected_line)
@@ -385,7 +372,7 @@ impl ProcessTabState {
         let mut lines = Vec::new();
         for summary in &self.summaries {
             let pid = summary.pid;
-            if !self.show_hidden && self.hidden_pids.contains(&pid) {
+            if !self.show_hidden && hidden_pids.contains(&pid) {
                 continue;
             }
             lines.push(ProcessLine {
@@ -507,7 +494,7 @@ impl ProcessTabState {
     }
 
     /// Left: collapse the innermost fold around the selected line
-    fn collapse_deepest(&mut self, entries: &[SyscallEntry]) {
+    fn collapse_deepest(&mut self, entries: &[SyscallEntry], hidden_pids: &HashSet<u32>) {
         let Some(line) = self.selected().cloned() else {
             return;
         };
@@ -523,19 +510,19 @@ impl ProcessTabState {
             if let Some(set) = self.section_set(header) {
                 set.remove(&pid);
             }
-            self.rebuild_display_lines(entries);
+            self.rebuild_display_lines(entries, hidden_pids);
             self.select_line(pid, header);
         } else {
             self.expanded.remove(&pid);
             self.expanded_execs.remove(&pid);
             self.expanded_children.remove(&pid);
-            self.rebuild_display_lines(entries);
+            self.rebuild_display_lines(entries, hidden_pids);
             self.select_row(pid);
         }
     }
 
     /// Right: expand the selected section header, or the selected process
-    fn expand_current(&mut self, entries: &[SyscallEntry]) {
+    fn expand_current(&mut self, entries: &[SyscallEntry], hidden_pids: &HashSet<u32>) {
         let Some(line) = self.selected().cloned() else {
             return;
         };
@@ -544,7 +531,7 @@ impl ProcessTabState {
             None => self.expanded.insert(line.pid),
         };
         if changed {
-            self.rebuild_display_lines(entries);
+            self.rebuild_display_lines(entries, hidden_pids);
         }
     }
 
@@ -561,7 +548,12 @@ impl ProcessTabState {
     }
 
     /// Spans for a detail line (everything except `Row`), without the tree prefix
-    pub fn detail_spans(&self, line: &ProcessLine, entries: &[SyscallEntry]) -> Vec<Span<'static>> {
+    pub fn detail_spans(
+        &self,
+        line: &ProcessLine,
+        entries: &[SyscallEntry],
+        hidden_pids: &HashSet<u32>,
+    ) -> Vec<Span<'static>> {
         let Some(summary) = self.summary(line.pid) else {
             return Vec::new();
         };
@@ -591,7 +583,7 @@ impl ProcessTabState {
                 };
                 // Same color as the parent's row, dimmed when it has no exec
                 let (cmd, dimmed) = self.command_label(parent);
-                let parent_style = self.reference_style(parent);
+                let parent_style = self.reference_style(hidden_pids, parent);
                 let mut spans = vec![
                     Span::styled("Parent: ", label),
                     Span::styled(format!("[{}] ", parent), parent_style),
@@ -705,7 +697,7 @@ impl ProcessTabState {
                     return Vec::new();
                 };
                 // Same color as the child's row, with an inherited command dimmed
-                let child_style = self.reference_style(child);
+                let child_style = self.reference_style(hidden_pids, child);
                 let mut spans = vec![Span::styled(format!("[{}] ", child), child_style)];
                 if let Some(child_summary) = self.summary(child) {
                     let kind = if child_summary.is_thread {
@@ -735,14 +727,20 @@ impl ProcessTabState {
         if line.kind == ProcessLineKind::Row {
             format!("{} {}", line.pid, self.command_label(line.pid).0)
         } else {
-            self.detail_spans(line, entries)
+            // Only span content is read here, so hidden styling is irrelevant.
+            self.detail_spans(line, entries, &HashSet::new())
                 .iter()
                 .map(|span| span.content.as_ref())
                 .collect()
         }
     }
 
-    pub fn handle_key(&mut self, event: KeyEvent, entries: &[SyscallEntry]) -> ProcessAction {
+    pub fn handle_key(
+        &mut self,
+        event: KeyEvent,
+        entries: &[SyscallEntry],
+        hidden_pids: &HashSet<u32>,
+    ) -> ProcessAction {
         if self.search_state.active {
             self.handle_search_key(event, entries);
             return ProcessAction::None;
@@ -766,33 +764,33 @@ impl ProcessTabState {
             KeyCode::End | KeyCode::Char('G') => {
                 self.selected_line = self.display_lines.len().saturating_sub(1);
             }
-            KeyCode::Enter | KeyCode::Char(' ') => return self.activate_current(entries),
-            KeyCode::Left => self.collapse_deepest(entries),
-            KeyCode::Right => self.expand_current(entries),
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                return self.activate_current(entries, hidden_pids);
+            }
+            KeyCode::Left => self.collapse_deepest(entries, hidden_pids),
+            KeyCode::Right => self.expand_current(entries, hidden_pids),
             KeyCode::Char('e') => {
                 self.expanded = self.summaries.iter().map(|s| s.pid).collect();
-                self.rebuild_display_lines(entries);
+                self.rebuild_display_lines(entries, hidden_pids);
             }
             KeyCode::Char('c') if !ctrl => {
                 let pid = self.selected().map(|line| line.pid);
                 self.expanded.clear();
                 self.expanded_execs.clear();
                 self.expanded_children.clear();
-                self.rebuild_display_lines(entries);
+                self.rebuild_display_lines(entries, hidden_pids);
                 if let Some(pid) = pid {
                     self.select_row(pid);
                 }
             }
             KeyCode::Char('h') => {
                 if let Some(pid) = self.selected().map(|line| line.pid) {
-                    let hidden = !self.is_hidden(pid);
-                    self.set_pid_hidden(pid, hidden, entries);
-                    return ProcessAction::HiddenChanged;
+                    return ProcessAction::ToggleHidden(pid);
                 }
             }
             KeyCode::Char('.') => {
                 self.show_hidden = !self.show_hidden;
-                self.rebuild_display_lines(entries);
+                self.rebuild_display_lines(entries, hidden_pids);
             }
             KeyCode::Char('H') => return ProcessAction::OpenFilterModal,
             KeyCode::Char('/') => self.start_search(),
@@ -804,16 +802,20 @@ impl ProcessTabState {
     }
 
     /// Select a process's row, turning on ghost mode if it is hidden
-    fn go_to_process(&mut self, pid: u32, entries: &[SyscallEntry]) {
-        if self.is_hidden(pid) && !self.show_hidden {
+    fn go_to_process(&mut self, pid: u32, entries: &[SyscallEntry], hidden_pids: &HashSet<u32>) {
+        if Self::is_hidden(hidden_pids, pid) && !self.show_hidden {
             self.show_hidden = true;
-            self.rebuild_display_lines(entries);
+            self.rebuild_display_lines(entries, hidden_pids);
         }
         self.select_row(pid);
     }
 
     /// Enter/Space: toggle a row, or follow a detail line to its target
-    fn activate_current(&mut self, entries: &[SyscallEntry]) -> ProcessAction {
+    fn activate_current(
+        &mut self,
+        entries: &[SyscallEntry],
+        hidden_pids: &HashSet<u32>,
+    ) -> ProcessAction {
         let Some(line) = self.selected().cloned() else {
             return ProcessAction::None;
         };
@@ -829,7 +831,7 @@ impl ProcessTabState {
                 } else {
                     self.expanded.insert(line.pid);
                 }
-                self.rebuild_display_lines(entries);
+                self.rebuild_display_lines(entries, hidden_pids);
                 return ProcessAction::None;
             }
             ProcessLineKind::ExecsHeader | ProcessLineKind::ChildrenHeader => {
@@ -838,18 +840,18 @@ impl ProcessTabState {
                 {
                     set.insert(line.pid);
                 }
-                self.rebuild_display_lines(entries);
+                self.rebuild_display_lines(entries, hidden_pids);
                 return ProcessAction::None;
             }
             ProcessLineKind::Parent => {
                 if let Some(parent) = summary.parent_pid {
-                    self.go_to_process(parent, entries);
+                    self.go_to_process(parent, entries, hidden_pids);
                 }
                 return ProcessAction::None;
             }
             ProcessLineKind::Child(i) => {
                 if let Some(&child) = summary.children.get(i) {
-                    self.go_to_process(child, entries);
+                    self.go_to_process(child, entries, hidden_pids);
                 }
                 return ProcessAction::None;
             }
@@ -1179,7 +1181,7 @@ mod tests {
                 .collect()
         };
         let key = |tab: &mut ProcessTabState, code: KeyCode| {
-            tab.handle_key(KeyEvent::from(code), &entries)
+            tab.handle_key(KeyEvent::from(code), &entries, &HashSet::new())
         };
         let selected = |tab: &ProcessTabState| {
             let line = &tab.display_lines[tab.selected_line];
@@ -1270,42 +1272,52 @@ mod tests {
                 .map(|l| l.pid)
                 .collect()
         };
+        // The App owns the hidden set; mirror its toggle here so the tab keeps the
+        // selection-fixup and rebuild behaviour this test exercises.
+        let mut hidden: HashSet<u32> = HashSet::new();
+        let press_h = |tab: &mut ProcessTabState, hidden: &mut HashSet<u32>| {
+            if let ProcessAction::ToggleHidden(pid) =
+                tab.handle_key(KeyEvent::from(KeyCode::Char('h')), &entries, hidden)
+            {
+                if !hidden.remove(&pid) {
+                    hidden.insert(pid);
+                }
+                tab.rebuild_display_lines(&entries, hidden);
+            }
+        };
 
         // `h` hides the selected process and moves to the next visible row
         tab.selected_line = 1;
-        assert!(matches!(
-            tab.handle_key(KeyEvent::from(KeyCode::Char('h')), &entries),
-            ProcessAction::HiddenChanged
-        ));
-        assert!(tab.is_hidden(101));
+        press_h(&mut tab, &mut hidden);
+        assert!(hidden.contains(&101));
         assert_eq!(rows(&tab), vec![100, 102]);
         assert_eq!(tab.display_lines[tab.selected_line].pid, 102);
 
         // Hiding the last row moves back to the previous one
-        tab.handle_key(KeyEvent::from(KeyCode::Char('h')), &entries);
+        press_h(&mut tab, &mut hidden);
         assert_eq!(rows(&tab), vec![100]);
         assert_eq!(tab.display_lines[tab.selected_line].pid, 100);
 
         // Ghost mode shows hidden rows again, and `h` there shows the process
-        tab.handle_key(KeyEvent::from(KeyCode::Char('.')), &entries);
+        tab.handle_key(KeyEvent::from(KeyCode::Char('.')), &entries, &hidden);
         assert_eq!(rows(&tab), vec![100, 101, 102]);
         tab.selected_line = 2;
-        tab.handle_key(KeyEvent::from(KeyCode::Char('h')), &entries);
-        assert!(!tab.is_hidden(102));
+        press_h(&mut tab, &mut hidden);
+        assert!(!hidden.contains(&102));
         assert_eq!(tab.display_lines[tab.selected_line].pid, 102);
     }
 
     #[test]
     fn test_enter_on_hidden_child_turns_on_ghost_mode() {
         let (entries, mut tab) = tab(TRACE);
-        tab.set_pid_hidden(101, true, &entries);
+        let hidden: HashSet<u32> = HashSet::from([101]);
 
         // Expand the root and its children
         tab.expanded.insert(100);
         tab.expanded_children.insert(100);
-        tab.rebuild_display_lines(&entries);
+        tab.rebuild_display_lines(&entries, &hidden);
         tab.select_line(100, ProcessLineKind::Child(0));
-        tab.handle_key(KeyEvent::from(KeyCode::Enter), &entries);
+        tab.handle_key(KeyEvent::from(KeyCode::Enter), &entries, &hidden);
 
         assert!(tab.show_hidden);
         let selected = &tab.display_lines[tab.selected_line];
@@ -1315,14 +1327,15 @@ mod tests {
     #[test]
     fn test_search() {
         let (entries, mut tab) = tab(TRACE);
-        tab.handle_key(KeyEvent::from(KeyCode::Char('/')), &entries);
+        let hidden = HashSet::new();
+        tab.handle_key(KeyEvent::from(KeyCode::Char('/')), &entries, &hidden);
         for c in "thread".chars() {
-            tab.handle_key(KeyEvent::from(KeyCode::Char(c)), &entries);
+            tab.handle_key(KeyEvent::from(KeyCode::Char(c)), &entries, &hidden);
         }
         assert_eq!(tab.search_state.matches, vec![2]);
         assert_eq!(tab.selected_line, 2);
 
-        tab.handle_key(KeyEvent::from(KeyCode::Esc), &entries);
+        tab.handle_key(KeyEvent::from(KeyCode::Esc), &entries, &hidden);
         assert_eq!(tab.selected_line, 0);
         assert!(tab.display_lines.iter().all(|l| !l.is_search_match));
     }

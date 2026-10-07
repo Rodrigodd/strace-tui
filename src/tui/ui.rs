@@ -1,6 +1,6 @@
 use super::app::{App, FilterTab, SearchState, Tab};
 use super::file_list::{FileCtx, FileLineKind, resource_style};
-use super::process_list::ProcessLineKind;
+use super::process_list::{ProcessLineKind, ProcessTabState};
 use super::syscall_colors::syscall_category_color;
 use crate::parser::split_arguments;
 use ratatui::{
@@ -206,7 +206,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let graph_hidden = if app.process_tab.show_hidden {
         &empty_hidden
     } else {
-        &app.process_tab.hidden_pids
+        &app.hidden_pids
     };
 
     for line_idx in start..end {
@@ -807,6 +807,7 @@ fn draw_process_list(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let tab = &app.process_tab;
+    let hidden_pids = &app.hidden_pids;
     let start = tab.scroll_offset;
     let end = (tab.scroll_offset + visible_height).min(tab.display_lines.len());
     let width = area.width as usize;
@@ -822,7 +823,7 @@ fn draw_process_list(f: &mut Frame, app: &mut App, area: Rect) {
             let (label, dimmed) = tab.command_label(line.pid);
             // Color the row with the process's graph color, dimmed when it has no exec. Hidden
             // processes (only shown in ghost mode) are gray.
-            let pid_color = if tab.is_hidden(line.pid) {
+            let pid_color = if ProcessTabState::is_hidden(hidden_pids, line.pid) {
                 Color::DarkGray
             } else {
                 app.process_graph.get_color(line.pid)
@@ -837,7 +838,7 @@ fn draw_process_list(f: &mut Frame, app: &mut App, area: Rect) {
             let graph_hidden = if tab.show_hidden {
                 None
             } else {
-                Some(&tab.hidden_pids)
+                Some(hidden_pids)
             };
             let empty_hidden = std::collections::HashSet::new();
             let graph_chars = app
@@ -891,8 +892,8 @@ fn draw_process_list(f: &mut Frame, app: &mut App, area: Rect) {
             let mut available = width.saturating_sub(prefix.chars().count());
             let mut spans = vec![Span::raw(prefix)];
             // Truncate the detail spans to the available width
-            let is_ghost = tab.is_hidden(line.pid);
-            for mut span in tab.detail_spans(line, &app.entries) {
+            let is_ghost = ProcessTabState::is_hidden(hidden_pids, line.pid);
+            for mut span in tab.detail_spans(line, &app.entries, hidden_pids) {
                 if is_ghost {
                     span.style = span.style.fg(Color::DarkGray);
                 }
@@ -995,7 +996,7 @@ fn draw_file_list(f: &mut Frame, app: &mut App, area: Rect) {
         files: &app.files,
         entries: &app.entries,
         hidden_syscalls: &app.hidden_syscalls,
-        hidden_pids: &app.process_tab.hidden_pids,
+        hidden_pids: &app.hidden_pids,
     };
     let graph = &app.process_graph;
     let pid_color = |pid: u32| graph.get_color(pid);
@@ -1096,8 +1097,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         let mut footer_text = String::from(
             "?: Help | q: Quit | 1-3: Tab | ↑↓/jk: Nav | ←→: Fold | Enter: Toggle/Jump | e/c: All | h: Hide | H: Filter | .: Ghost",
         );
-        if !tab.hidden_pids.is_empty() {
-            footer_text.push_str(&format!(" | Hidden: {}", tab.hidden_pids.len()));
+        if !app.hidden_pids.is_empty() {
+            footer_text.push_str(&format!(" | Hidden: {}", app.hidden_pids.len()));
             if tab.show_hidden {
                 footer_text.push_str(" (shown)");
             }
@@ -1344,7 +1345,7 @@ fn draw_filter_modal(f: &mut Frame, app: &mut App) {
                 FilterTab::Processes => {
                     let summary = &app.process_tab.summaries[idx];
                     let pid = summary.pid;
-                    let is_hidden = app.process_tab.is_hidden(pid);
+                    let is_hidden = app.hidden_pids.contains(&pid);
                     let checkbox = if is_hidden { "[ ]" } else { "[✓]" };
                     let (label, dimmed) = app.process_tab.command_label(pid);
                     // Colors only for visible, non-highlighted rows; the item style wins otherwise
