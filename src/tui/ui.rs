@@ -614,9 +614,21 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let prefix_str = App::tree_prefix_to_string(tree_prefix);
 
                 let content = if let Some(unfinished_idx) = entry.unfinished_entry_idx {
-                    format!("Resumed from entry #{}", unfinished_idx + 1)
+                    match app.entries.get(unfinished_idx) {
+                        Some(other) if !other.timestamp.is_empty() => {
+                            format!("Suspended at {}", other.timestamp)
+                        }
+                        Some(_) => "Suspended above".to_string(),
+                        None => continue,
+                    }
                 } else if let Some(resumed_idx) = entry.resumed_entry_idx {
-                    format!("See resumed in entry #{}", resumed_idx + 1)
+                    match app.entries.get(resumed_idx) {
+                        Some(other) if !other.timestamp.is_empty() => {
+                            format!("Resumed at {}", other.timestamp)
+                        }
+                        Some(_) => "Resumed below".to_string(),
+                        None => continue,
+                    }
                 } else {
                     continue;
                 };
@@ -1186,6 +1198,7 @@ fn draw_help(f: &mut Frame) {
         )),
         Line::from("  Enter/Space Toggle expansion"),
         Line::from("  Enter       Open backtrace in editor"),
+        Line::from("  Enter       Jump to resource / linked syscall"),
         Line::from("  ←           Collapse item"),
         Line::from("  →           Expand item"),
         Line::from("  e           Expand all syscalls"),

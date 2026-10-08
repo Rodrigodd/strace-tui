@@ -1196,6 +1196,17 @@ impl App {
             return;
         }
 
+        // An unfinished/resumed reference jumps to the other half of the split syscall
+        if let DisplayLine::EntryReference { entry_idx, .. } =
+            &self.display_lines[self.selected_line]
+        {
+            let entry = &self.entries[*entry_idx];
+            if let Some(linked_idx) = entry.unfinished_entry_idx.or(entry.resumed_entry_idx) {
+                self.jump_to_entry(linked_idx);
+            }
+            return;
+        }
+
         match &self.display_lines[self.selected_line] {
             DisplayLine::SyscallHeader { entry_idx, .. } => {
                 // Toggle syscall expansion
@@ -2109,9 +2120,21 @@ impl App {
             DisplayLine::EntryReference { entry_idx, .. } => {
                 let entry = &self.entries[*entry_idx];
                 if let Some(unfinished_idx) = entry.unfinished_entry_idx {
-                    format!("Resumed from entry #{}", unfinished_idx + 1)
+                    match self.entries.get(unfinished_idx) {
+                        Some(other) if !other.timestamp.is_empty() => {
+                            format!("Suspended at {}", other.timestamp)
+                        }
+                        Some(_) => "Suspended above".to_string(),
+                        None => String::new(),
+                    }
                 } else if let Some(resumed_idx) = entry.resumed_entry_idx {
-                    format!("See resumed in entry #{}", resumed_idx + 1)
+                    match self.entries.get(resumed_idx) {
+                        Some(other) if !other.timestamp.is_empty() => {
+                            format!("Resumed at {}", other.timestamp)
+                        }
+                        Some(_) => "Resumed below".to_string(),
+                        None => String::new(),
+                    }
                 } else {
                     String::new()
                 }
